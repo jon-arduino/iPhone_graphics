@@ -44,28 +44,38 @@ void BleGraphicsTransport::begin()
 
     NimBLEAdvertising *advertising = NimBLEDevice::getAdvertising();
     advertising->addServiceUUID(_serviceUUID);
-    advertising->setScanResponse(true); // correct for 2.1.0
+
+    // Your version supports setScanResponseData(const NimBLEAdvertisementData&)
+    NimBLEAdvertisementData scanResp;
+    advertising->setScanResponseData(scanResp);
+
     advertising->start();
 }
 
-// ------------------ Callbacks ------------------
+// ------------------ NimBLEServerCallbacks ------------------
 
-void BleGraphicsTransport::onConnect(NimBLEServer *pServer)
+void BleGraphicsTransport::onConnect(NimBLEServer *pServer,
+                                     NimBLEConnInfo &connInfo)
 {
     _connected = true;
 }
 
-void BleGraphicsTransport::onDisconnect(NimBLEServer *pServer)
+void BleGraphicsTransport::onDisconnect(NimBLEServer *pServer,
+                                        NimBLEConnInfo &connInfo,
+                                        int reason)
 {
     _connected = false;
     _notificationsEnabled = false;
     NimBLEDevice::startAdvertising();
 }
 
-void BleGraphicsTransport::onMTUChange(uint16_t mtu, NimBLEConnInfo &connInfo)
+void BleGraphicsTransport::onMTUChange(uint16_t mtu,
+                                       NimBLEConnInfo &connInfo)
 {
     _mtu = mtu;
 }
+
+// ------------------ NimBLECharacteristicCallbacks ------------------
 
 void BleGraphicsTransport::onSubscribe(NimBLECharacteristic *pCharacteristic,
                                        NimBLEConnInfo &connInfo,
@@ -74,7 +84,7 @@ void BleGraphicsTransport::onSubscribe(NimBLECharacteristic *pCharacteristic,
     _notificationsEnabled = (subValue & 0x0001) != 0;
 }
 
-// ------------------ Sending ------------------
+// ------------------ send() ------------------
 
 void BleGraphicsTransport::send(const uint8_t *data, uint16_t len)
 {

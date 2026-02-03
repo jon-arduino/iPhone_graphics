@@ -19,12 +19,12 @@ public:
     bool isConnected() const { return _connected; }
     uint16_t negotiatedMTU() const { return _mtu; }
 
-    // NimBLEServerCallbacks — 2.1.0 signatures
-    void onConnect(NimBLEServer *pServer) override;
-    void onDisconnect(NimBLEServer *pServer) override;
+    // NimBLEServerCallbacks — must match NimBLEServerCallbacks exactly
+    void onConnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo) override;
+    void onDisconnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo, int reason) override;
     void onMTUChange(uint16_t mtu, NimBLEConnInfo &connInfo) override;
 
-    // NimBLECharacteristicCallbacks — 2.1.0 signature
+    // NimBLECharacteristicCallbacks — NimBLEConnInfo-based signature
     void onSubscribe(NimBLECharacteristic *pCharacteristic,
                      NimBLEConnInfo &connInfo,
                      uint16_t subValue) override;
