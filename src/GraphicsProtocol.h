@@ -48,38 +48,48 @@ enum GfxCommand : uint8_t
     GFX_CMD_SET_FONT = 0x56,
     GFX_CMD_WRITE_CHAR = 0x57,
 
-    // Utility
-    GFX_CMD_GET_TEXT_BOUNDS = 0x60 // (optional round‑trip)
+    // Optional
+    GFX_CMD_GET_TEXT_BOUNDS = 0x60
 };
 
 // -----------------------------------------------------------------------------
-// Packet Header
+// PACKING (CRITICAL FOR BLE PROTOCOL)
 // -----------------------------------------------------------------------------
-struct GfxPacketHeader
+#if defined(__GNUC__)
+#define GFX_PACKED __attribute__((packed))
+#else
+#pragma pack(push, 1)
+#define GFX_PACKED
+#endif
+
+// -----------------------------------------------------------------------------
+// Packet Header (3 bytes exactly)
+// -----------------------------------------------------------------------------
+struct GFX_PACKED GfxPacketHeader
 {
     uint8_t cmd;     // GfxCommand
-    uint16_t length; // payload length in bytes (little-endian)
+    uint16_t length; // payload length (little-endian)
 };
 
 // -----------------------------------------------------------------------------
 // Payload Structures
 // -----------------------------------------------------------------------------
 
-// BEGIN (width, height)
-struct GfxBeginPayload
+// BEGIN
+struct GFX_PACKED GfxBeginPayload
 {
     uint16_t width;
     uint16_t height;
 };
 
-// CLEAR (color)
-struct GfxClearPayload
+// CLEAR
+struct GFX_PACKED GfxClearPayload
 {
     uint16_t color; // RGB565
 };
 
 // DRAW_PIXEL
-struct GfxDrawPixelPayload
+struct GFX_PACKED GfxDrawPixelPayload
 {
     int16_t x;
     int16_t y;
@@ -87,7 +97,7 @@ struct GfxDrawPixelPayload
 };
 
 // DRAW_LINE
-struct GfxDrawLinePayload
+struct GFX_PACKED GfxDrawLinePayload
 {
     int16_t x0;
     int16_t y0;
@@ -96,8 +106,8 @@ struct GfxDrawLinePayload
     uint16_t color;
 };
 
-// FAST HLINE / VLINE
-struct GfxFastLinePayload
+// FAST LINE
+struct GFX_PACKED GfxFastLinePayload
 {
     int16_t x;
     int16_t y;
@@ -105,8 +115,8 @@ struct GfxFastLinePayload
     uint16_t color;
 };
 
-// RECT / FILL_RECT
-struct GfxRectPayload
+// RECT
+struct GFX_PACKED GfxRectPayload
 {
     int16_t x;
     int16_t y;
@@ -116,7 +126,7 @@ struct GfxRectPayload
 };
 
 // ROUND RECT
-struct GfxRoundRectPayload
+struct GFX_PACKED GfxRoundRectPayload
 {
     int16_t x;
     int16_t y;
@@ -127,7 +137,7 @@ struct GfxRoundRectPayload
 };
 
 // CIRCLE
-struct GfxCirclePayload
+struct GFX_PACKED GfxCirclePayload
 {
     int16_t x;
     int16_t y;
@@ -136,7 +146,7 @@ struct GfxCirclePayload
 };
 
 // TRIANGLE
-struct GfxTrianglePayload
+struct GFX_PACKED GfxTrianglePayload
 {
     int16_t x0;
     int16_t y0;
@@ -148,17 +158,17 @@ struct GfxTrianglePayload
 };
 
 // BITMAP (monochrome)
-struct GfxBitmapPayload
+struct GFX_PACKED GfxBitmapPayload
 {
     int16_t x;
     int16_t y;
     int16_t w;
     int16_t h;
-    // Followed by bitmap bytes
+    // bitmap bytes follow immediately
 };
 
 // BITMAP with background
-struct GfxBitmapBgPayload
+struct GFX_PACKED GfxBitmapBgPayload
 {
     int16_t x;
     int16_t y;
@@ -166,63 +176,59 @@ struct GfxBitmapBgPayload
     int16_t h;
     uint16_t fg;
     uint16_t bg;
-    // Followed by bitmap bytes
+    // bitmap bytes follow immediately
 };
 
-// TEXT: SET_CURSOR
-struct GfxSetCursorPayload
+// TEXT
+struct GFX_PACKED GfxSetCursorPayload
 {
     int16_t x;
     int16_t y;
 };
 
-// TEXT: SET_TEXT_COLOR
-struct GfxSetTextColorPayload
+struct GFX_PACKED GfxSetTextColorPayload
 {
     uint16_t color;
 };
 
-// TEXT: SET_TEXT_COLOR_BG
-struct GfxSetTextColorBgPayload
+struct GFX_PACKED GfxSetTextColorBgPayload
 {
     uint16_t fg;
     uint16_t bg;
 };
 
-// TEXT: SET_TEXT_SIZE
-struct GfxSetTextSizePayload
+struct GFX_PACKED GfxSetTextSizePayload
 {
     uint8_t size;
 };
 
-// TEXT: SET_TEXT_WRAP
-struct GfxSetTextWrapPayload
+struct GFX_PACKED GfxSetTextWrapPayload
 {
-    uint8_t wrap; // 0 or 1
+    uint8_t wrap;
 };
 
-// TEXT: CP437
-struct GfxCp437Payload
+struct GFX_PACKED GfxCp437Payload
 {
     uint8_t enable;
 };
 
-// TEXT: SET_FONT
-struct GfxSetFontPayload
+struct GFX_PACKED GfxSetFontPayload
 {
-    uint16_t fontId; // iPhone maps this to a real font
+    uint16_t fontId;
 };
 
-// TEXT: WRITE_CHAR
-struct GfxWriteCharPayload
+struct GFX_PACKED GfxWriteCharPayload
 {
     uint8_t c;
 };
 
-// GET_TEXT_BOUNDS (optional)
-struct GfxGetTextBoundsPayload
+struct GFX_PACKED GfxGetTextBoundsPayload
 {
     int16_t x;
     int16_t y;
-    // Followed by text bytes
+    // text bytes follow
 };
+
+#if !defined(__GNUC__)
+#pragma pack(pop)
+#endif

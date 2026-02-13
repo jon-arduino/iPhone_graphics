@@ -9,7 +9,7 @@
 class GraphicsTransport
 {
 public:
-    virtual ~GraphicsTransport() {}
+    virtual ~GraphicsTransport() = default;
 
     // Called once at startup (BLE init, Wi-Fi connect, etc.)
     virtual void begin() = 0;

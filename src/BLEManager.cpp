@@ -1,75 +1,81 @@
 #include "BLEManager.h"
+#include <NimBLE2904.h>
+#include <string.h>
 
-class ServerCallbacks : public NimBLEServerCallbacks
+// -------------------- Callback Implementations --------------------
+
+class BLEManager::ServerCB : public NimBLEServerCallbacks
 {
 public:
-    explicit ServerCallbacks(volatile bool *subscribedFlag)
-        : subscribed(subscribedFlag) {}
+    explicit ServerCB(BLEManager *owner) : _owner(owner) {}
 
     void onConnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo) override
     {
-        Serial.println("[BLE] Client connected");
-        Serial.print("[BLE] Peer: ");
+        (void)pServer;
+        _owner->_connected = true;
+        Serial.println("[BLE] connected");
+        Serial.print("[BLE] peer: ");
         Serial.println(connInfo.getAddress().toString().c_str());
-        // Keep advertising off while connected (default behavior is fine)
     }
 
     void onDisconnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo, int reason) override
     {
-        Serial.print("[BLE] Client disconnected, reason=");
+        (void)pServer;
+        (void)connInfo;
+        _owner->_connected = false;
+        _owner->_notifySubscribed = false;
+        Serial.print("[BLE] disconnected reason=");
         Serial.println(reason);
+        _owner->startAdvertising();
+    }
 
-        // Reset subscription state (iPhone must re-subscribe after reconnect)
-        if (subscribed)
-            *subscribed = false;
-
-        // Restart advertising so iPhone can see us again
-        NimBLEDevice::startAdvertising();
-        Serial.println("[BLE] Advertising restarted");
+    void onMTUChange(uint16_t mtu, NimBLEConnInfo &connInfo) override
+    {
+        (void)connInfo;
+        _owner->_mtu = mtu;
+        Serial.print("[BLE] MTU=");
+        Serial.println(mtu);
     }
 
 private:
-    volatile bool *subscribed;
+    BLEManager *_owner;
 };
 
-class TxCallbacks : public NimBLECharacteristicCallbacks
+class BLEManager::TxCharCB : public NimBLECharacteristicCallbacks
 {
 public:
-    explicit TxCallbacks(volatile bool *subscribedFlag)
-        : subscribed(subscribedFlag) {}
+    explicit TxCharCB(BLEManager *owner) : _owner(owner) {}
 
     void onSubscribe(NimBLECharacteristic *pCharacteristic,
                      NimBLEConnInfo &connInfo,
                      uint16_t subValue) override
     {
-        bool isSub = (subValue != 0);
-        if (subscribed)
-            *subscribed = isSub;
-
-        Serial.print("[BLE] TX subscribed=");
-        Serial.println(isSub ? "YES" : "NO");
+        (void)pCharacteristic;
+        (void)connInfo;
+        _owner->_notifySubscribed = (subValue & 0x0001) != 0;
+        Serial.print("[BLE] notify subscribed=");
+        Serial.println(_owner->_notifySubscribed ? "YES" : "NO");
     }
 
 private:
-    volatile bool *subscribed;
+    BLEManager *_owner;
 };
 
-class RxCallbacks : public NimBLECharacteristicCallbacks
+class BLEManager::RxCharCB : public NimBLECharacteristicCallbacks
 {
 public:
-    explicit RxCallbacks(uint8_t *buf, volatile size_t *len, size_t cap)
-        : rxBuf(buf), rxLen(len), capacity(cap) {}
+    explicit RxCharCB(BLEManager *owner) : _owner(owner) {}
 
-    void onWrite(NimBLECharacteristic *pCharacteristic,
-                 NimBLEConnInfo &connInfo) override
+    void onWrite(NimBLECharacteristic *pCharacteristic, NimBLEConnInfo &connInfo) override
     {
+        (void)connInfo;
         std::string v = pCharacteristic->getValue();
         size_t n = v.size();
-        if (n > capacity)
-            n = capacity;
+        if (n > BLEManager::RX_BUF_SIZE)
+            n = BLEManager::RX_BUF_SIZE;
 
-        memcpy(rxBuf, v.data(), n);
-        *rxLen = n;
+        memcpy(_owner->rxBuf, v.data(), n);
+        _owner->rxLen = n;
 
         Serial.print("[BLE] RX write ");
         Serial.print(n);
@@ -77,100 +83,113 @@ public:
     }
 
 private:
-    uint8_t *rxBuf;
-    volatile size_t *rxLen;
-    size_t capacity;
+    BLEManager *_owner;
 };
 
-// ---- BLEManager implementation ----
+// -------------------- BLEManager --------------------
 
-BLEManager::BLEManager()
-    : pServer(nullptr),
-      pTxChar(nullptr),
-      pRxChar(nullptr),
-      clientSubscribed(false),
-      rxLen(0)
+BLEManager::BLEManager() {}
+
+uint16_t BLEManager::effectiveChunkSize() const
 {
-    memset(rxBuf, 0, sizeof(rxBuf));
+    uint16_t maxPayload = (_mtu > 23) ? (_mtu - 3) : 20;
+    if (maxPayload > 180)
+        maxPayload = 180;
+    return maxPayload;
+}
+
+bool BLEManager::canSend() const
+{
+    return _connected && _notifySubscribed && (pTxChar != nullptr);
+}
+
+void BLEManager::startAdvertising()
+{
+    NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+    adv->stop();
+    adv->start();
+    Serial.println("[BLE] advertising restarted");
 }
 
 void BLEManager::begin()
 {
     NimBLEDevice::init("ESP32-Telemetry");
-
-    // Debug-friendly power
     NimBLEDevice::setPower(ESP_PWR_LVL_P9);
 
     Serial.print("[BLE] MAC: ");
     Serial.println(NimBLEDevice::getAddress().toString().c_str());
 
-    // Optional: larger MTU helps if you ever send > 20 bytes per update
-    // Must be set before connections are made.
-    // NimBLEDevice::setMTU(185);
-
     pServer = NimBLEDevice::createServer();
 
-    static ServerCallbacks serverCB(&clientSubscribed);
+    static BLEManager::ServerCB serverCB(this);
+    static BLEManager::TxCharCB txCB(this);
+    static BLEManager::RxCharCB rxCB(this);
+
     pServer->setCallbacks(&serverCB);
 
     NimBLEService *service = pServer->createService(NimBLEUUID(SERVICE_UUID));
 
-    // TX: ESP32 -> iPhone (Notify + Read)
+    // TX: notify/read
     pTxChar = service->createCharacteristic(
         NimBLEUUID(TX_CHARACTERISTIC_UUID),
         NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
-
-    static TxCallbacks txCB(&clientSubscribed);
     pTxChar->setCallbacks(&txCB);
+    pTxChar->addDescriptor(new NimBLE2904());
 
-    // Optional: set an initial value so iPhone "read" works immediately
-    uint8_t hello[] = {0x01};
-    pTxChar->setValue(hello, sizeof(hello));
-
-    // RX: iPhone -> ESP32 (Write)
+    // RX: write/write_no_resp
     pRxChar = service->createCharacteristic(
         NimBLEUUID(RX_CHARACTERISTIC_UUID),
         NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
-
-    static RxCallbacks rxCB(rxBuf, &rxLen, RX_BUF_SIZE);
     pRxChar->setCallbacks(&rxCB);
 
     service->start();
 
-    // ---- Advertising: iOS filtered scan REQUIRES service UUID in PRIMARY ADV ----
+    // Advertising: put service UUID in PRIMARY ADV so iOS filtered scan sees it
     NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
     adv->reset();
 
-    // Primary ADV: small + guaranteed UUID
     NimBLEAdvertisementData advData;
     advData.setFlags(BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP);
     advData.addServiceUUID(NimBLEUUID(SERVICE_UUID));
     adv->setAdvertisementData(advData);
 
-    // Scan response: put the name here (keeps primary packet small)
     NimBLEAdvertisementData scanResp;
     scanResp.setName("ESP32-Telemetry");
     adv->setScanResponseData(scanResp);
 
-    // Reasonable intervals for reliability (0.625ms units)
-    adv->setMinInterval(48);  // 30ms
-    adv->setMaxInterval(160); // 100ms
+    adv->setMinInterval(48);
+    adv->setMaxInterval(160);
 
     adv->start();
-    Serial.println("[BLE] Advertising started (service UUID in primary ADV)");
+    Serial.println("[BLE] advertising started");
+}
+
+void BLEManager::sendBytes(const uint8_t *data, uint16_t len)
+{
+    if (!canSend() || !data || len == 0)
+        return;
+
+    uint16_t chunkSize = effectiveChunkSize();
+    uint16_t offset = 0;
+
+    while (offset < len)
+    {
+        if (!canSend())
+            break;
+
+        uint16_t chunk = (len - offset > chunkSize) ? chunkSize : (len - offset);
+
+        pTxChar->setValue(data + offset, chunk);
+        pTxChar->notify();
+
+        offset += chunk;
+        delay(2);
+    }
 }
 
 void BLEManager::sendTelemetry(const TelemetryPacket &pkt)
 {
-    if (!pTxChar)
-        return;
-
-    // Only notify if the iPhone has subscribed
-    if (!clientSubscribed)
-        return;
-
-    pTxChar->setValue((uint8_t *)&pkt, sizeof(pkt));
-    pTxChar->notify();
+    sendBytes(reinterpret_cast<const uint8_t *>(&pkt), sizeof(pkt));
 }
 
 bool BLEManager::hasRxData() const
@@ -187,6 +206,6 @@ size_t BLEManager::readRx(uint8_t *dst, size_t maxLen)
         n = maxLen;
 
     memcpy(dst, rxBuf, n);
-    rxLen = 0; // consume
+    rxLen = 0;
     return n;
 }
