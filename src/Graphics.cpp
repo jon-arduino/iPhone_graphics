@@ -9,20 +9,41 @@ Graphics::Graphics(GraphicsTransport &transport)
     : _transport(transport) {}
 
 // -----------------------------------------------------------------------------
-// Internal helper: send a framed command packet (header + payload)
+// Wire format expected by iPhone:
+//   [0]    0xA5 (magic)
+//   [1..2] lenLE = number of bytes in (cmd + payload)
+//   [3]    cmd
+//   [4..]  payload
 // -----------------------------------------------------------------------------
-void Graphics::sendCommand(uint8_t cmd, const void *payload, uint16_t len)
+
+static constexpr uint8_t GFX_MAGIC = 0xA5;
+
+static inline void putU16LE(uint8_t out[2], uint16_t v)
 {
-    GfxPacketHeader hdr;
-    hdr.cmd = cmd;
-    hdr.length = len;
+    out[0] = static_cast<uint8_t>(v & 0xFF);
+    out[1] = static_cast<uint8_t>((v >> 8) & 0xFF);
+}
 
-    _transport.send(reinterpret_cast<const uint8_t *>(&hdr), sizeof(hdr));
+// -----------------------------------------------------------------------------
+// Internal helper: send a framed command packet (magic + len + cmd + payload)
+// -----------------------------------------------------------------------------
+void Graphics::sendCommand(uint8_t cmd, const void *payload, uint16_t payloadLen)
+{
+    // len = cmd(1) + payloadLen
+    const uint16_t len = static_cast<uint16_t>(1 + payloadLen);
 
-    if (payload && len > 0)
+    uint8_t hdr[3];
+    hdr[0] = GFX_MAGIC;
+    putU16LE(&hdr[1], len);
+
+    _transport.send(hdr, sizeof(hdr)); // magic + lenLE
+    _transport.send(&cmd, 1);          // cmd byte
+
+    if (payload && payloadLen > 0)
     {
-        _transport.send(reinterpret_cast<const uint8_t *>(payload), len);
+        _transport.send(reinterpret_cast<const uint8_t *>(payload), payloadLen);
     }
+    delay(15); // slight delay to avoid overwhelming BLE (optional, depends on transport)
 }
 
 // -----------------------------------------------------------------------------
@@ -32,11 +53,15 @@ void Graphics::sendCommandWithTail(uint8_t cmd,
                                    const void *fixed, uint16_t fixedLen,
                                    const void *tail, uint16_t tailLen)
 {
-    GfxPacketHeader hdr;
-    hdr.cmd = cmd;
-    hdr.length = fixedLen + tailLen;
+    const uint16_t payloadLen = static_cast<uint16_t>(fixedLen + tailLen);
+    const uint16_t len = static_cast<uint16_t>(1 + payloadLen);
 
-    _transport.send(reinterpret_cast<const uint8_t *>(&hdr), sizeof(hdr));
+    uint8_t hdr[3];
+    hdr[0] = GFX_MAGIC;
+    putU16LE(&hdr[1], len);
+
+    _transport.send(hdr, sizeof(hdr));
+    _transport.send(&cmd, 1);
 
     if (fixed && fixedLen)
     {
@@ -46,6 +71,7 @@ void Graphics::sendCommandWithTail(uint8_t cmd,
     {
         _transport.send(reinterpret_cast<const uint8_t *>(tail), tailLen);
     }
+    delay(15); // slight delay to avoid overwhelming BLE (optional, depends on transport)
 }
 
 // -----------------------------------------------------------------------------
