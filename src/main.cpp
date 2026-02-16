@@ -11,7 +11,7 @@
 GPSModule gps(16, 17);
 DisplayModule display;
 
-static BLEManager ble;
+BLEManager ble;
 static BleGraphicsTransport transport(ble);
 static Graphics gfx(transport);
 
@@ -39,7 +39,9 @@ void setup()
 
 void loop()
 {
-    gps.update();
+    ble.pump();
+    // rest of your app...
+ //   gps.update();
 
     // Run the graphics test once after iPhone becomes ready
     static bool ranTestThisConnection = false;
@@ -62,6 +64,7 @@ void loop()
         }
     }
 
+    /* 
     // Normal telemetry flow
     if (gps.hasNewData())
     {
@@ -102,11 +105,12 @@ void loop()
 
         // printTelemetry(pkt);
         display.renderTelemetry(pkt);
-    }
+    } */
 
     // Detect disconnect and allow test again on next connection
     if (!ble.canSend())
     {
         ranTestThisConnection = false;
     }
+
 }

@@ -36,7 +36,7 @@ void DisplayModule::begin()
     tft.setCursor(10, 30);
     tft.print("System Ready");
 
-    delay(800);
+    //delay(800);
     tft.fillScreen(ST77XX_BLACK);
 
     // -------------------------------

@@ -1,6 +1,10 @@
 // Graphics.cpp
 #include "Graphics.h"
 #include <string.h>
+#include "BLEManager.h"
+extern BLEManager ble; // must match the exact name/type of your global instance
+
+
 
 // -----------------------------------------------------------------------------
 // Constructor
@@ -29,21 +33,39 @@ static inline void putU16LE(uint8_t out[2], uint16_t v)
 // -----------------------------------------------------------------------------
 void Graphics::sendCommand(uint8_t cmd, const void *payload, uint16_t payloadLen)
 {
-    // len = cmd(1) + payloadLen
     const uint16_t len = static_cast<uint16_t>(1 + payloadLen);
 
-    uint8_t hdr[3];
-    hdr[0] = GFX_MAGIC;
-    putU16LE(&hdr[1], len);
+    // total bytes on wire: magic(1) + lenLE(2) + cmd(1) + payload
+    const uint16_t total = static_cast<uint16_t>(3 + 1 + payloadLen);
 
-    _transport.send(hdr, sizeof(hdr)); // magic + lenLE
-    _transport.send(&cmd, 1);          // cmd byte
-
-    if (payload && payloadLen > 0)
+    // Use a small stack buffer for typical commands; fall back to heap for bigger payloads.
+    if (total <= 256)
     {
-        _transport.send(reinterpret_cast<const uint8_t *>(payload), payloadLen);
+        uint8_t buf[256];
+        buf[0] = GFX_MAGIC;
+        putU16LE(&buf[1], len);
+        buf[3] = cmd;
+        if (payload && payloadLen)
+        {
+            memcpy(&buf[4], payload, payloadLen);
+        }
+        _transport.send(buf, total);
     }
-    delay(15); // slight delay to avoid overwhelming BLE (optional, depends on transport)
+    else
+    {
+        uint8_t *buf = (uint8_t *)malloc(total);
+        if (!buf)
+            return;
+        buf[0] = GFX_MAGIC;
+        putU16LE(&buf[1], len);
+        buf[3] = cmd;
+        if (payload && payloadLen)
+        {
+            memcpy(&buf[4], payload, payloadLen);
+        }
+        _transport.send(buf, total);
+        free(buf);
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -56,22 +78,38 @@ void Graphics::sendCommandWithTail(uint8_t cmd,
     const uint16_t payloadLen = static_cast<uint16_t>(fixedLen + tailLen);
     const uint16_t len = static_cast<uint16_t>(1 + payloadLen);
 
-    uint8_t hdr[3];
-    hdr[0] = GFX_MAGIC;
-    putU16LE(&hdr[1], len);
+    // send: magic+len+cmd+fixed  (one buffer)
+    const uint16_t headTotal = static_cast<uint16_t>(3 + 1 + fixedLen);
 
-    _transport.send(hdr, sizeof(hdr));
-    _transport.send(&cmd, 1);
-
-    if (fixed && fixedLen)
+    if (headTotal <= 256)
     {
-        _transport.send(reinterpret_cast<const uint8_t *>(fixed), fixedLen);
+        uint8_t head[256];
+        head[0] = GFX_MAGIC;
+        putU16LE(&head[1], len);
+        head[3] = cmd;
+        if (fixed && fixedLen)
+            memcpy(&head[4], fixed, fixedLen);
+        _transport.send(head, headTotal);
     }
+    else
+    {
+        uint8_t *head = (uint8_t *)malloc(headTotal);
+        if (!head)
+            return;
+        head[0] = GFX_MAGIC;
+        putU16LE(&head[1], len);
+        head[3] = cmd;
+        if (fixed && fixedLen)
+            memcpy(&head[4], fixed, fixedLen);
+        _transport.send(head, headTotal);
+        free(head);
+    }
+
+    // then stream tail bytes (bitmap/text)
     if (tail && tailLen)
     {
         _transport.send(reinterpret_cast<const uint8_t *>(tail), tailLen);
     }
-    delay(15); // slight delay to avoid overwhelming BLE (optional, depends on transport)
 }
 
 // -----------------------------------------------------------------------------
@@ -323,4 +361,6 @@ size_t Graphics::write(uint8_t c)
 void Graphics::flush()
 {
     sendCommand(GFX_CMD_FLUSH, nullptr, 0);
+    ble.flushTx(5000);
 }
+
