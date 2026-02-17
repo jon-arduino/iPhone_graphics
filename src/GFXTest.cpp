@@ -204,6 +204,7 @@ static void testText(Graphics &gfx, uint16_t w, uint16_t h, uint32_t d)
     gfx.setTextSize(1);
     gfx.setTextColor(0xFFFF);
     gfx.println("Adafruit-style GFX Test");
+    pauseAndFlush(gfx, d);
 
     gfx.setTextColor(0xFFE0);
     gfx.println("ESP32 -> iPhone renderer");
@@ -211,11 +212,13 @@ static void testText(Graphics &gfx, uint16_t w, uint16_t h, uint32_t d)
     gfx.setTextColor(0x07FF);
     gfx.print("Size 1: ");
     gfx.println("Hello!");
+    pauseAndFlush(gfx, d);
 
     gfx.setTextSize(2);
     gfx.setTextColor(0xF81F);
     gfx.setCursor(0, 30);
     gfx.println("Size 2");
+    pauseAndFlush(gfx, d);
 
     gfx.setTextSize(1);
     gfx.setTextColor(0x07E0);
@@ -226,12 +229,14 @@ static void testText(Graphics &gfx, uint16_t w, uint16_t h, uint32_t d)
     gfx.println(h);
 
     pauseAndFlush(gfx, d);
+    delay(2000);
 }
 
 void runGFXTest(Graphics &gfx, uint16_t width, uint16_t height, uint32_t sceneDelayMs)
 {
     // Tell iPhone the target display size
     gfx.begin(width, height);
+    gfx.setRotation(1); // Landscape    
     pauseAndFlush(gfx, sceneDelayMs);
 
     // Similar ordering to Adafruit's graphicstest
@@ -244,6 +249,7 @@ void runGFXTest(Graphics &gfx, uint16_t width, uint16_t height, uint32_t sceneDe
     testRoundRects(gfx, width, height, sceneDelayMs);
     testTriangles(gfx, width, height, sceneDelayMs);
     testText(gfx, width, height, sceneDelayMs);
+    delay(5000); // Pause at end so you can admire the final screen before it goes away (or run next test)  
 
     // Final screen
     gfx.clear(0x0000);

@@ -15,6 +15,8 @@ enum GfxCommand : uint8_t
     GFX_CMD_BEGIN = 0x01,
     GFX_CMD_CLEAR = 0x02,
     GFX_CMD_FLUSH = 0x03,
+    GFX_CMD_SET_ROTATION = 0x05,
+    GFX_CMD_INVERT_DISPLAY = 0x06,
 
     // Pixels & Lines
     GFX_CMD_DRAW_PIXEL = 0x10,
@@ -86,6 +88,12 @@ struct GFX_PACKED GfxBeginPayload
 struct GFX_PACKED GfxClearPayload
 {
     uint16_t color; // RGB565
+};
+
+// SET_ROTATION
+struct GfxSetRotationPayload
+{
+    uint8_t rotation; // 0..3
 };
 
 // DRAW_PIXEL

@@ -36,8 +36,10 @@ public:
     // Returns true if all data was sent, false if timeout hit with data still queued.
     bool flushTx(uint32_t timeoutMs);
 
-    // NEW: call frequently from loop() to actually notify()
-    void pump();
+    // Call frequently from loop() to schedule BLE TX (must be called from main context, not inside callbacks)
+    // Not needed for data sent with sendbytes() since that will trigger pump() as needed, 
+    //but can be used to ensure timely sending of any pending data.
+    void pump_BLE_txQ();
 
    // Public diagnostics (do not expose ring internals)
     size_t txQueuedBytes() const;
@@ -61,10 +63,7 @@ private:
     volatile uint16_t _pendingLen = 0;
     volatile int _pendingCode = 0;
 
-    // Used to request draining from callback context (avoid re-entrancy)
-    volatile bool _kickDrain = false;
-
-    // --- NimBLE ---
+      // --- NimBLE ---
     NimBLEServer *pServer = nullptr;
     NimBLECharacteristic *pTxChar = nullptr;
     NimBLECharacteristic *pRxChar = nullptr;

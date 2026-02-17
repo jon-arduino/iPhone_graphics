@@ -7,6 +7,7 @@
 #include "GFXTest.h"
 #include "BleGraphicsTransport.h"
 #include "Graphics.h"
+#include "GFXOrientTest.h"
 
 GPSModule gps(16, 17);
 DisplayModule display;
@@ -39,7 +40,7 @@ void setup()
 
 void loop()
 {
-    ble.pump();
+    ble.pump_BLE_txQ();
     // rest of your app...
  //   gps.update();
 
@@ -49,7 +50,8 @@ void loop()
     if (!ranTestThisConnection && ble.canSend())
     {
         Serial.println("iPhone subscribed — running GFX test...");
-        runGFXTest(gfx, 160, 128, 700);
+      //  runGFXTest(gfx, 256, 128, 700);
+        runGFXOrientTest(gfx, 256, 128, 3000);
         ranTestThisConnection = true;
     }
 

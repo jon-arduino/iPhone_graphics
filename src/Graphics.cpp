@@ -4,8 +4,6 @@
 #include "BLEManager.h"
 extern BLEManager ble; // must match the exact name/type of your global instance
 
-
-
 // -----------------------------------------------------------------------------
 // Constructor
 // -----------------------------------------------------------------------------
@@ -323,17 +321,16 @@ void Graphics::setTextSize(uint8_t size)
 void Graphics::setTextWrap(bool wrap)
 {
     _wrap = wrap;
-    GfxSetTextWrapPayload p{ static_cast<uint8_t>(wrap ? 1 : 0) };
+    GfxSetTextWrapPayload p{static_cast<uint8_t>(wrap ? 1 : 0)};
     sendCommand(GFX_CMD_SET_TEXT_WRAP, &p, sizeof(p));
 }
 
 void Graphics::cp437(bool enable)
 {
     _cp437 = enable;
-    GfxCp437Payload p{ static_cast<uint8_t>(enable ? 1 : 0) };
+    GfxCp437Payload p{static_cast<uint8_t>(enable ? 1 : 0)};
     sendCommand(GFX_CMD_CP437, &p, sizeof(p));
 }
-
 
 void Graphics::setFont(const GFXfont *font)
 {
@@ -363,4 +360,9 @@ void Graphics::flush()
     sendCommand(GFX_CMD_FLUSH, nullptr, 0);
     ble.flushTx(5000);
 }
-
+void Graphics::setRotation(uint8_t r)
+{
+    r &= 3;
+    GfxSetRotationPayload p{r};
+    sendCommand(GFX_CMD_SET_ROTATION, &p, sizeof(p));
+}

@@ -64,7 +64,6 @@ void BLEManager::TxCharCB::onSubscribe(NimBLECharacteristic *pCharacteristic,
         _owner->_lastNotifyMicros = 0;
         _owner->_txInFlight = false;
         _owner->_pendingLen = 0;
-        _owner->_kickDrain = true;
     }
 }
 
@@ -105,9 +104,6 @@ void BLEManager::TxCharCB::onStatus(NimBLECharacteristic *pCharacteristic, int c
                       (int)_owner->_txInFlight,
                       code);
     }
-
-    // Request drain from main context (avoid calling _txDrain() inside callback)
-    _owner->_kickDrain = true;
 }
 
 void BLEManager::RxCharCB::onWrite(NimBLECharacteristic *pCharacteristic, NimBLEConnInfo &connInfo)
@@ -230,7 +226,6 @@ void BLEManager::_txClear()
     _txInFlight = false;
     _pendingLen = 0;
     _pendingCode = 0;
-    _kickDrain = false;
 }
 
 size_t BLEManager::_txEnqueueSome(const uint8_t *data, size_t len)
@@ -325,10 +320,8 @@ void BLEManager::sendBytes(const uint8_t *data, uint16_t len)
     }
 }
 
-void BLEManager::pump()
+void BLEManager::pump_BLE_txQ()
 {
-    if (_kickDrain)
-        _kickDrain = false;
     _txDrain();
 }
 
