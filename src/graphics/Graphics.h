@@ -7,8 +7,6 @@
 #include "GraphicsProtocol.h"
 #include "GraphicsTransport.h"
 
-// Forward-declare Adafruit GFX font type (to avoid pulling in Adafruit_GFX.h here)
-//struct GFXfont;
 #include <Adafruit_GFX.h> // for GFXfont
 
 // Match your protocol color type (RGB565)
@@ -18,12 +16,10 @@ class Graphics : public Print
 {
 public:
     explicit Graphics(GraphicsTransport &transport);
-    
-    // width and height of the virtual display (after rotation applied)
+
+    // Virtual display size (after rotation)
     uint16_t width() const;
     uint16_t height() const;
-    uint16_t _baseW = 0, _baseH = 0;
-    uint8_t _rotation = 0;
 
     // System
     void begin(uint16_t width, uint16_t height);
@@ -81,7 +77,12 @@ public:
 private:
     GraphicsTransport &_transport;
 
-    // Local mirrored state (optional but handy)
+    // --- Adafruit-style "device" state ---
+    uint16_t _baseW = 0;
+    uint16_t _baseH = 0;
+    uint8_t _rotation = 0;
+
+    // Local mirrored text state (optional but handy)
     int16_t _cursorX = 0;
     int16_t _cursorY = 0;
     Color _textColor = 0xFFFF;
