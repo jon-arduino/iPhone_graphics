@@ -377,6 +377,8 @@ void Graphics::flush()
 void Graphics::setRotation(uint8_t r)
 {
     r &= 3;
+    _rotation = r; // IMPORTANT: keep local state in sync
+
     GfxSetRotationPayload p{r};
     sendCommand(GFX_CMD_SET_ROTATION, &p, sizeof(p));
 }
