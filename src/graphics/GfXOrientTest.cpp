@@ -1,4 +1,4 @@
-#include "Graphics.h"
+#include "graphics/Graphics.h"
 
 // If you have gfx.setRotation(r) implemented, enable this.
 #ifndef HAS_GFX_SET_ROTATION

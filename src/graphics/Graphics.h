@@ -18,6 +18,12 @@ class Graphics : public Print
 {
 public:
     explicit Graphics(GraphicsTransport &transport);
+    
+    // width and height of the virtual display (after rotation applied)
+    uint16_t width() const;
+    uint16_t height() const;
+    uint16_t _baseW = 0, _baseH = 0;
+    uint8_t _rotation = 0;
 
     // System
     void begin(uint16_t width, uint16_t height);

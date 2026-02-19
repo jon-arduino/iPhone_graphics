@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <NimBLEDevice.h>
-#include "TelemetryPacket.h"
+#include "telemetry/TelemetryPacket.h"
 
 // Nordic UART Service-style UUIDs
 static const char *SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";

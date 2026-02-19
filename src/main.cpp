@@ -1,13 +1,14 @@
 #include <Arduino.h>
-#include "GPSModule.h"
-#include "BLEManager.h"
-#include "TelemetryPacket.h"
-#include "TelemetryPrinter.h"
-#include "DisplayModule.h"
-#include "GFXTest.h"
-#include "BleGraphicsTransport.h"
-#include "Graphics.h"
-#include "GFXOrientTest.h"
+#include "gps/GPSModule.h"
+#include "ble/BLEManager.h"
+#include "ble/BleGraphicsTransport.h"
+#include "telemetry/TelemetryPacket.h"
+#include "telemetry/TelemetryPrinter.h"
+#include "display/DisplayModule.h"
+#include "demos/GFXTest.h"
+#include "demos/GFXOrientTest.h"
+#include "graphics/Graphics.h"
+
 
 GPSModule gps(16, 17);
 DisplayModule display;
@@ -50,7 +51,7 @@ void loop()
     if (!ranTestThisConnection && ble.canSend())
     {
         Serial.println("iPhone subscribed — running GFX test...");
-      //  runGFXTest(gfx, 256, 128, 700);
+        runGFXTest(gfx, 256, 128, 700);
         runGFXOrientTest(gfx, 256, 128, 3000);
         ranTestThisConnection = true;
     }

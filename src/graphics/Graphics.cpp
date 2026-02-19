@@ -1,7 +1,7 @@
 // Graphics.cpp
 #include "Graphics.h"
 #include <string.h>
-#include "BLEManager.h"
+#include "ble/BLEManager.h"
 extern BLEManager ble; // must match the exact name/type of your global instance
 
 // -----------------------------------------------------------------------------
@@ -117,6 +117,20 @@ void Graphics::begin(uint16_t width, uint16_t height)
 {
     GfxBeginPayload p{width, height};
     sendCommand(GFX_CMD_BEGIN, &p, sizeof(p));
+    _baseW = width;
+    _baseH = height ;
+    _rotation = 0; // or keep existing rotation if you want
+    // send initDisplay(w,h) to phone as you already do
+}
+
+uint16_t Graphics::width() const
+{
+    return (_rotation & 1) ? _baseH : _baseW;
+}
+
+uint16_t Graphics::height() const
+{
+    return (_rotation & 1) ? _baseW : _baseH;
 }
 
 // -----------------------------------------------------------------------------

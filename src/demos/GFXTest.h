@@ -1,6 +1,6 @@
 #pragma once
 #include <Arduino.h>
-#include "Graphics.h"
+#include "graphics/Graphics.h"
 
 // Call this from your firmware after BLE is connected (or whenever you want).
 // width/height should match the virtual display size you want on iPhone.

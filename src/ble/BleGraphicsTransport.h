@@ -1,7 +1,7 @@
 #pragma once
 
 #include <stdint.h>
-#include "GraphicsTransport.h"
+#include "graphics/Graphics.h"
 #include "BLEManager.h"
 
 // Adapter: GraphicsTransport implemented over BLEManager (single BLE owner).

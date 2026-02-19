@@ -236,7 +236,7 @@ void runGFXTest(Graphics &gfx, uint16_t width, uint16_t height, uint32_t sceneDe
 {
     // Tell iPhone the target display size
     gfx.begin(width, height);
-    gfx.setRotation(1); // Landscape    
+    gfx.setRotation(0); // Landscape    
     pauseAndFlush(gfx, sceneDelayMs);
 
     // Similar ordering to Adafruit's graphicstest
