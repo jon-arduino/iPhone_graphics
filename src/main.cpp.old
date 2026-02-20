@@ -58,7 +58,7 @@ void loop()
     if (nowCanSend && !lastCanSend)
     {
         Serial.println("iPhone subscribed — initializing iPhone display...");
-        dispPhone.begin(); // resend init + static labels on every reconnect
+        dispPhone.begin();                 // resend init + static labels on every reconnect
     }
 
     // Falling edge: lost ability to send
@@ -140,10 +140,9 @@ void loop()
 
         // Always update local TFT
         display.renderTelemetry(pkt);
-       // printTelemetry(pkt);
 
-            // Only update iPhone when it's ready
-            if (nowCanSend)
+        // Only update iPhone when it's ready
+        if (nowCanSend)
         {
             dispPhone.renderTelemetry(pkt);
         }
