@@ -139,7 +139,7 @@ uint16_t Graphics::height() const
 void Graphics::clear(Color color)
 {
     GfxClearPayload p{color};
-    sendCommand(GFX_CMD_CLEAR, &p, sizeof(p));
+    sendCommand(GFX_CMD_FILL_SCREEN, &p, sizeof(p));
 }
 
 // -----------------------------------------------------------------------------
@@ -381,4 +381,9 @@ void Graphics::setRotation(uint8_t r)
 
     GfxSetRotationPayload p{r};
     sendCommand(GFX_CMD_SET_ROTATION, &p, sizeof(p));
+}
+void Graphics::invertDisplay(bool i)
+{
+    GfxInvertDisplayPayload p{static_cast<uint8_t>(i ? 1 : 0)};
+    sendCommand(GFX_CMD_INVERT_DISPLAY, &p, sizeof(p));
 }

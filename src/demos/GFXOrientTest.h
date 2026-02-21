@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include <Adafruit_GFX.h>
 class Graphics;
 
-void runGFXOrientTest(Graphics &gfx, uint16_t width, uint16_t height, uint32_t holdMs);
+void runGFXOrientTest(Adafruit_GFX &d, uint32_t holdMs);

@@ -73,6 +73,7 @@ void BLEManager::TxCharCB::onStatus(NimBLECharacteristic *pCharacteristic, int c
 
     static uint32_t okCount = 0;
     static uint32_t failCount = 0;
+    static bool debug_txStatus = false;
 
     if (code == 0)
         okCount++;
@@ -95,7 +96,7 @@ void BLEManager::TxCharCB::onStatus(NimBLECharacteristic *pCharacteristic, int c
 
     // Throttled debug print
     uint32_t total = okCount + failCount;
-    if ((total % 10) == 0)
+    if (((total % 100) == 0) && debug_txStatus)
     {
         Serial.printf("[BLE] txStatus ok=%lu fail=%lu queued=%u inflight=%d lastCode=%d\n",
                       (unsigned long)okCount,

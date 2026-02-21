@@ -1,34 +1,34 @@
 #include "GFXTest.h"
 
 // --------- helpers ----------
-static inline void pauseAndFlush(Graphics &gfx, uint32_t ms)
+static inline void pauseAndFlush(Adafruit_GFX &gfx, uint32_t ms)
 {
     gfx.flush();
     if (ms)
         delay(ms);
 }
 
-static void testFillScreen(Graphics &gfx, uint16_t w, uint16_t h, uint32_t d)
+static void testFillScreen(Adafruit_GFX &gfx, uint16_t w, uint16_t h, uint32_t d)
 {
     (void)w;
     (void)h;
-    gfx.clear(0x0000);
+    gfx.fillScreen(0x0000);
     pauseAndFlush(gfx, d);
-    gfx.clear(0xF800);
+    gfx.fillScreen(0xF800);
     pauseAndFlush(gfx, d); // Red
-    gfx.clear(0x07E0);
+    gfx.fillScreen(0x07E0);
     pauseAndFlush(gfx, d); // Green
-    gfx.clear(0x001F);
+    gfx.fillScreen(0x001F);
     pauseAndFlush(gfx, d); // Blue
-    gfx.clear(0xFFFF);
+    gfx.fillScreen(0xFFFF);
     pauseAndFlush(gfx, d); // White
-    gfx.clear(0x0000);
+    gfx.fillScreen(0x0000);
     pauseAndFlush(gfx, d);
 }
 
-static void testLines(Graphics &gfx, uint16_t w, uint16_t h, uint32_t d)
+static void testLines(Adafruit_GFX &gfx, uint16_t w, uint16_t h, uint32_t d)
 {
-    gfx.clear(0x0000);
+    gfx.fillScreen(0x0000);
 
     // Corner fan
     for (int16_t x = 0; x < (int16_t)w; x += 6)
@@ -41,7 +41,7 @@ static void testLines(Graphics &gfx, uint16_t w, uint16_t h, uint32_t d)
     }
     pauseAndFlush(gfx, d);
 
-    gfx.clear(0x0000);
+    gfx.fillScreen(0x0000);
     for (int16_t x = 0; x < (int16_t)w; x += 6)
     {
         gfx.drawLine((int16_t)w - 1, 0, x, (int16_t)h - 1, 0xF81F); // Magenta
@@ -52,7 +52,7 @@ static void testLines(Graphics &gfx, uint16_t w, uint16_t h, uint32_t d)
     }
     pauseAndFlush(gfx, d);
 
-    gfx.clear(0x0000);
+    gfx.fillScreen(0x0000);
     for (int16_t x = 0; x < (int16_t)w; x += 6)
     {
         gfx.drawLine(0, (int16_t)h - 1, x, 0, 0xFFE0); // Yellow
@@ -63,7 +63,7 @@ static void testLines(Graphics &gfx, uint16_t w, uint16_t h, uint32_t d)
     }
     pauseAndFlush(gfx, d);
 
-    gfx.clear(0x0000);
+    gfx.fillScreen(0x0000);
     for (int16_t x = 0; x < (int16_t)w; x += 6)
     {
         gfx.drawLine((int16_t)w - 1, (int16_t)h - 1, x, 0, 0x07E0); // Green
@@ -75,9 +75,9 @@ static void testLines(Graphics &gfx, uint16_t w, uint16_t h, uint32_t d)
     pauseAndFlush(gfx, d);
 }
 
-static void testFastLines(Graphics &gfx, uint16_t w, uint16_t h, uint32_t d)
+static void testFastLines(Adafruit_GFX &gfx, uint16_t w, uint16_t h, uint32_t d)
 {
-    gfx.clear(0x0000);
+    gfx.fillScreen(0x0000);
     for (int16_t y = 0; y < (int16_t)h; y += 5)
     {
         gfx.drawFastHLine(0, y, (int16_t)w, 0xF800); // red
@@ -89,9 +89,9 @@ static void testFastLines(Graphics &gfx, uint16_t w, uint16_t h, uint32_t d)
     pauseAndFlush(gfx, d);
 }
 
-static void testRects(Graphics &gfx, uint16_t w, uint16_t h, uint32_t d)
+static void testRects(Adafruit_GFX &gfx, uint16_t w, uint16_t h, uint32_t d)
 {
-    gfx.clear(0x0000);
+    gfx.fillScreen(0x0000);
     int16_t cx = (int16_t)w / 2;
     int16_t cy = (int16_t)h / 2;
     int16_t color = 0xFFFF;
@@ -106,9 +106,9 @@ static void testRects(Graphics &gfx, uint16_t w, uint16_t h, uint32_t d)
     pauseAndFlush(gfx, d);
 }
 
-static void testFilledRects(Graphics &gfx, uint16_t w, uint16_t h, uint32_t d)
+static void testFilledRects(Adafruit_GFX &gfx, uint16_t w, uint16_t h, uint32_t d)
 {
-    gfx.clear(0x0000);
+    gfx.fillScreen(0x0000);
     int16_t cx = (int16_t)w / 2;
     int16_t cy = (int16_t)h / 2;
 
@@ -122,9 +122,9 @@ static void testFilledRects(Graphics &gfx, uint16_t w, uint16_t h, uint32_t d)
     pauseAndFlush(gfx, d);
 }
 
-static void testCircles(Graphics &gfx, uint16_t w, uint16_t h, uint32_t d)
+static void testCircles(Adafruit_GFX &gfx, uint16_t w, uint16_t h, uint32_t d)
 {
-    gfx.clear(0x0000);
+    gfx.fillScreen(0x0000);
     int16_t cx = (int16_t)w / 2;
     int16_t cy = (int16_t)h / 2;
     int16_t rmax = (int16_t)min(w, h) / 2;
@@ -135,7 +135,7 @@ static void testCircles(Graphics &gfx, uint16_t w, uint16_t h, uint32_t d)
     }
     pauseAndFlush(gfx, d);
 
-    gfx.clear(0x0000);
+    gfx.fillScreen(0x0000);
     for (int16_t r = rmax; r > 2; r -= 10)
     {
         uint16_t c = (uint16_t)((r * 31) & 0xFFFF);
@@ -145,9 +145,9 @@ static void testCircles(Graphics &gfx, uint16_t w, uint16_t h, uint32_t d)
     pauseAndFlush(gfx, d);
 }
 
-static void testTriangles(Graphics &gfx, uint16_t w, uint16_t h, uint32_t d)
+static void testTriangles(Adafruit_GFX &gfx, uint16_t w, uint16_t h, uint32_t d)
 {
-    gfx.clear(0x0000);
+    gfx.fillScreen(0x0000);
     int16_t cx = (int16_t)w / 2;
     int16_t cy = (int16_t)h / 2;
     int16_t size = (int16_t)min(w, h) / 2;
@@ -162,7 +162,7 @@ static void testTriangles(Graphics &gfx, uint16_t w, uint16_t h, uint32_t d)
     }
     pauseAndFlush(gfx, d);
 
-    gfx.clear(0x0000);
+    gfx.fillScreen(0x0000);
     for (int16_t i = size; i > 0; i -= 12)
     {
         uint16_t c = (uint16_t)((i * 17) & 0xFFFF);
@@ -172,9 +172,9 @@ static void testTriangles(Graphics &gfx, uint16_t w, uint16_t h, uint32_t d)
     pauseAndFlush(gfx, d);
 }
 
-static void testRoundRects(Graphics &gfx, uint16_t w, uint16_t h, uint32_t d)
+static void testRoundRects(Adafruit_GFX &gfx, uint16_t w, uint16_t h, uint32_t d)
 {
-    gfx.clear(0x0000);
+    gfx.fillScreen(0x0000);
     int16_t cx = (int16_t)w / 2;
     int16_t cy = (int16_t)h / 2;
 
@@ -186,7 +186,7 @@ static void testRoundRects(Graphics &gfx, uint16_t w, uint16_t h, uint32_t d)
     }
     pauseAndFlush(gfx, d);
 
-    gfx.clear(0x0000);
+    gfx.fillScreen(0x0000);
     for (int16_t i = (int16_t)min(w, h); i > 0; i -= 12)
     {
         uint16_t c = (uint16_t)((i * 9) & 0xFFFF);
@@ -196,9 +196,9 @@ static void testRoundRects(Graphics &gfx, uint16_t w, uint16_t h, uint32_t d)
     pauseAndFlush(gfx, d);
 }
 
-static void testText(Graphics &gfx, uint16_t w, uint16_t h, uint32_t d)
+static void testText(Adafruit_GFX &gfx, uint16_t w, uint16_t h, uint32_t d)
 {
-    gfx.clear(0x0000);
+    gfx.fillScreen(0x0000);
 
     gfx.setCursor(0, 0);
     gfx.setTextSize(1);
@@ -232,10 +232,10 @@ static void testText(Graphics &gfx, uint16_t w, uint16_t h, uint32_t d)
     delay(2000);
 }
 
-void runGFXTest(Graphics &gfx, uint16_t width, uint16_t height, uint32_t sceneDelayMs)
+void runGFXTest(Adafruit_GFX &gfx, uint16_t width, uint16_t height, uint32_t sceneDelayMs)
 {
     // Tell iPhone the target display size
-    gfx.begin(width, height);
+    //gfx.begin(width, height);
     gfx.setRotation(0); // Landscape    
     pauseAndFlush(gfx, sceneDelayMs);
 
@@ -252,7 +252,7 @@ void runGFXTest(Graphics &gfx, uint16_t width, uint16_t height, uint32_t sceneDe
     delay(5000); // Pause at end so you can admire the final screen before it goes away (or run next test)  
 
     // Final screen
-    gfx.clear(0x0000);
+    gfx.fillScreen(0x0000);
     gfx.setTextSize(2);
     gfx.setTextColor(0xFFFF);
     gfx.setCursor(10, 10);

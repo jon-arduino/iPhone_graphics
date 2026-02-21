@@ -26,6 +26,7 @@ public:
     void clear(Color color = 0x0000);
     void flush();
     void setRotation(uint8_t r);
+    void invertDisplay(bool i);
 
     // Pixels & Lines
     void drawPixel(int16_t x, int16_t y, Color color);

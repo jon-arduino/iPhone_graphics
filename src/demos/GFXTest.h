@@ -1,7 +1,6 @@
 #pragma once
 #include <Arduino.h>
-#include "graphics/Graphics.h"
+#include <Adafruit_GFX.h>
 
-// Call this from your firmware after BLE is connected (or whenever you want).
-// width/height should match the virtual display size you want on iPhone.
-void runGFXTest(Graphics &gfx, uint16_t width, uint16_t height, uint32_t sceneDelayMs = 500);
+// Runs the Adafruit-style GFX demo against ANY Adafruit_GFX display
+void runGFXTest(Adafruit_GFX &d, uint16_t w, uint16_t h, uint32_t holdMs);

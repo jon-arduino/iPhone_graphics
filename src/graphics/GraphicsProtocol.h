@@ -13,7 +13,7 @@ enum GfxCommand : uint8_t
 {
     // System
     GFX_CMD_BEGIN = 0x01,
-    GFX_CMD_CLEAR = 0x02,
+    GFX_CMD_FILL_SCREEN = 0x02,
     GFX_CMD_FLUSH = 0x03,
     GFX_CMD_SET_ROTATION = 0x05,
     GFX_CMD_INVERT_DISPLAY = 0x06,
@@ -94,6 +94,12 @@ struct GFX_PACKED GfxClearPayload
 struct GfxSetRotationPayload
 {
     uint8_t rotation; // 0..3
+};
+
+// Invert Display
+struct GFX_PACKED GfxInvertDisplayPayload
+{
+    uint8_t invert; // 0/1
 };
 
 // DRAW_PIXEL

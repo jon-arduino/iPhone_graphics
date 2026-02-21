@@ -1,50 +1,40 @@
 #include "DisplayModule.h"
-#include <SPI.h>
 
-#define TFT_CS 5
-#define TFT_DC 2
-#define TFT_RST 4
-
-// ESP32-safe constructor: pass SPI object explicitly
-DisplayModule::DisplayModule()
-    : tft(&SPI, TFT_CS, TFT_DC, TFT_RST)
+DisplayModule::DisplayModule(Adafruit_GFX &display)
+    : _d(display)
 {
 }
 
 // -------------------------------
-// Initialize display once
-// Draw static labels once
-// Leave screen ready for fast updates
+// Draw static labels ONCE
+// Works on any Adafruit_GFX display
 // -------------------------------
-void DisplayModule::begin()
+void DisplayModule::begin(uint8_t rotation)
 {
-    // Initialize SPI with explicit pin mapping
-    SPI.begin(18, -1, 23, TFT_CS);
+    // For a real TFT this rotates addressing; for iPhone driver this maps logically too.
+    _d.setRotation(rotation);
 
-    // Initialize ST7735 controller
-    tft.initR(INITR_BLACKTAB);
-    tft.setRotation(1);
-    tft.fillScreen(ST77XX_BLACK);
+    _d.fillScreen(ST77XX_BLACK);
 
     // --- Startup Banner ---
-    tft.setTextColor(ST77XX_YELLOW);
-    tft.setTextSize(2);
-    tft.setCursor(10, 10);
-    tft.print("Telemetry");
+    _d.setTextColor(ST77XX_YELLOW);
+    _d.setTextSize(2);
+    _d.setCursor(10, 10);
+    _d.print("Telemetry");
 
-    tft.setTextSize(1);
-    tft.setCursor(10, 30);
-    tft.print("System Ready");
+    _d.setTextSize(1);
+    _d.setCursor(10, 30);
+    _d.print("System Ready");
 
-    //delay(800);
-    tft.fillScreen(ST77XX_BLACK);
+    // Clear banner screen (matches your old behavior)
+    _d.fillScreen(ST77XX_BLACK);
 
     // -------------------------------
     // Draw static labels ONCE
     // These never change, so no flicker
     // -------------------------------
-    tft.setTextColor(ST77XX_CYAN);
-    tft.setTextSize(1);
+    _d.setTextColor(ST77XX_CYAN);
+    _d.setTextSize(1);
 
     int y = 0;
 
@@ -80,8 +70,8 @@ void DisplayModule::begin()
 // -------------------------------
 void DisplayModule::drawLabel(int16_t x, int16_t y, const char *label)
 {
-    tft.setCursor(x, y);
-    tft.print(label);
+    _d.setCursor(x, y);
+    _d.print(label);
 }
 
 // -------------------------------
@@ -91,12 +81,11 @@ void DisplayModule::drawLabel(int16_t x, int16_t y, const char *label)
 void DisplayModule::drawValue(int16_t x, int16_t y, float value, uint8_t decimals)
 {
     // Erase previous value area (80px wide, 10px tall)
-    tft.fillRect(x, y, 80, 10, ST77XX_BLACK);
-
+    _d.fillRect(x, y, 80, 10, ST77XX_BLACK);
     // Draw updated value
-    tft.setCursor(x, y);
-    tft.setTextColor(ST77XX_WHITE);
-    tft.print(value, decimals);
+    _d.setCursor(x, y);
+    
+    _d.print(value, decimals);
 }
 
 // -------------------------------
@@ -107,6 +96,7 @@ void DisplayModule::renderTelemetry(const TelemetryPacket &pkt)
 {
     int valueX = 50; // aligned to the right of labels
     int y = 0;
+    _d.setTextColor(ST77XX_WHITE);    // all values in white; (labels are cyan)
 
     drawValue(valueX, y, pkt.lat, 6);
     y += 12;
