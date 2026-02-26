@@ -11,7 +11,7 @@ public:
     explicit BleGraphicsTransport(BLEManager &ble)
         : _ble(ble) {}
 
-    void begin() { _ble.begin(); }
+    void begin() override { _ble.begin(); }
 
     bool canSend() const { return _ble.canSend(); }
 

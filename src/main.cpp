@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <SPI.h>
 
-#include "gps/GPSModule.h"
+#include "GPS/GPSModule.h"
 #include "telemetry/TelemetryPacket.h"
 #include "display/DisplayModule.h"
 
@@ -10,231 +10,188 @@
 #include "graphics/Graphics.h"
 
 #include <Adafruit_ST7735.h>
-#include "Adafruit_iPhone/Adafruit_iPhoneTFT.h" // adjust include path if needed
+#include "Adafruit_iPhone/Adafruit_iphoneTFT.h"
 
 #include "demos/GFXTest.h"
 #include "demos/GFXOrientTest.h"
 
+#include "WiFi/WiFiManager.h"
+#include "WiFi/WiFiTransport.h"
+
 static constexpr uint16_t DISP_W = 128;
 static constexpr uint16_t DISP_H = 160;
 
-// ST7735 pins (your existing wiring)
-#define TFT_CS 5
-#define TFT_DC 2
+#define TFT_CS  5
+#define TFT_DC  2
 #define TFT_RST 4
 
-// Choose rotations you want for each target
-static constexpr uint8_t ROT_TFT = 1;
+static constexpr uint8_t ROT_TFT   = 1;
 static constexpr uint8_t ROT_PHONE = 1;
 
-// ---- Modules ----
+// ── Hardware TFT ──────────────────────────────────────────────────────────────
 GPSModule gps(16, 17);
-
-// Real TFT
 static Adafruit_ST7735 tft(&SPI, TFT_CS, TFT_DC, TFT_RST);
+static DisplayModule   displayTFT(tft);
 
-// iPhone graphics pipeline
+// ── BLE graphics pipeline ─────────────────────────────────────────────────────
 BLEManager ble;
-static BleGraphicsTransport transport(ble);
-static Graphics gfx(transport);
-static Adafruit_iPhoneTFT iphone_tft(gfx, (int16_t)DISP_W, (int16_t)DISP_H);
+static BleGraphicsTransport bleTransport(ble);
+static Graphics             bleGfx(bleTransport);
+static Adafruit_iPhoneTFT   ble_iphone_tft(bleGfx, (int16_t)DISP_W, (int16_t)DISP_H);
+static DisplayModule        displayBlePhone(ble_iphone_tft);
+static bool                 blePhoneReady = false;
 
-// DisplayModules now take Adafruit_GFX&
-static DisplayModule displayTFT(tft);
-static DisplayModule displayPhone(iphone_tft);
+// ── WiFi graphics pipeline ────────────────────────────────────────────────────
+const char*   ssid     = "lotz_net1";
+const char*   password = "thelotznetwork1";
+WiFiManager   wifiManager(ssid, password, "esp32-gps");
+WiFiTransport wifiTransport(wifiManager);
+static Graphics           wifiGfx(wifiTransport);
+static Adafruit_iPhoneTFT wifi_iphone_tft(wifiGfx, (int16_t)DISP_W, (int16_t)DISP_H);
+static DisplayModule      displayWifiPhone(wifi_iphone_tft);
+static bool               wifiPhoneReady = false;
 
-// Track whether phone is currently initialized with labels, etc.
-static bool phoneReady = false;
+// ── Helpers ───────────────────────────────────────────────────────────────────
+static void initTftUI()        { displayTFT.begin(ROT_TFT); }
 
-// Optional helper: wait once at boot
-static bool waitForIPhone(uint32_t timeoutMs = 20000)
+static void initBlePhoneUI()
 {
-    uint32_t start = millis();
-    while (millis() - start < timeoutMs)
-    {
-        if (ble.canSend())
-            return true;
-        delay(50);
-    }
-    return false;
+    ble_iphone_tft.begin(0x0000);
+    displayBlePhone.begin(ROT_PHONE);
+    ble_iphone_tft.flush();
+    blePhoneReady = true;
 }
 
-static void initPhoneUI()
+static void initWifiPhoneUI()
 {
-    // Allocate remote surface + clear it
-    iphone_tft.begin(0x0000);      // black
-    displayPhone.begin(ROT_PHONE); // draws banner + static labels
-    iphone_tft.flush();
-    phoneReady = true;
-}
-
-static void initTftUI()
-{
-    displayTFT.begin(ROT_TFT);
+    wifi_iphone_tft.begin(0x0000);
+    displayWifiPhone.begin(ROT_PHONE);
+    wifi_iphone_tft.flush();
+    wifiPhoneReady = true;
 }
 
 static void runTestsOnAvailableDisplays(uint8_t which)
 {
-    // Run on TFT always
-    if (which == '1')
-    {
-        Serial.println("Running GFXTest on TFT...");
-        runGFXTest(tft, DISP_W, DISP_H, 700);
-    }
-    else if (which == '2')
-    {
-        Serial.println("Running GFXOrientTest on TFT...");
-        runGFXOrientTest(tft, 3000);
+    if (which == '1') { Serial.println("Running GFXTest on TFT..."); runGFXTest(tft, DISP_W, DISP_H, 700); }
+    else if (which == '2') { Serial.println("Running GFXOrientTest on TFT..."); runGFXOrientTest(tft, 3000); }
+
+    if (blePhoneReady && ble.canSend()) {
+        if (which == '1') { runGFXTest(ble_iphone_tft, DISP_W, DISP_H, 700); }
+        else if (which == '2') { runGFXOrientTest(ble_iphone_tft, 3000); }
+        ble_iphone_tft.flush();
     }
 
-    // Run on phone only if ready
-    if (phoneReady && ble.canSend())
-    {
-        if (which == '1')
-        {
-            Serial.println("Running GFXTest on iPhone...");
-            runGFXTest(iphone_tft, DISP_W, DISP_H, 700);
-        }
-        else if (which == '2')
-        {
-            Serial.println("Running GFXOrientTest on iPhone...");
-            runGFXOrientTest(iphone_tft, 3000);
-        }
-        iphone_tft.flush();
+    if (wifiPhoneReady && wifiTransport.canSend()) {
+        if (which == '1') { runGFXTest(wifi_iphone_tft, DISP_W, DISP_H, 700); }
+        else if (which == '2') { runGFXOrientTest(wifi_iphone_tft, 3000); }
+        wifi_iphone_tft.flush();
     }
 
-    // After tests, restore telemetry screens (labels)
-    Serial.println("Restoring telemetry UI...");
     initTftUI();
-    if (ble.canSend())
-    {
-        initPhoneUI();
-    }
+    if (ble.canSend())           initBlePhoneUI();
+    if (wifiTransport.canSend()) initWifiPhoneUI();
 }
 
 static void pollConsole()
 {
-    if (!Serial.available())
-        return;
-
+    if (!Serial.available()) return;
     int c = Serial.read();
-    if (c == '\n' || c == '\r')
-        return;
-
-    if (c == '1' || c == '2')
-    {
-        runTestsOnAvailableDisplays((uint8_t)c);
-    }
-    else
-    {
-        Serial.println("Unknown command. Type 1 for GFX test, 2 for Orient test.");
-    }
-
-    // Drain any extra characters on the line
-    while (Serial.available())
-    {
+    if (c == '\n' || c == '\r') return;
+    if (c == '1' || c == '2') { runTestsOnAvailableDisplays((uint8_t)c); }
+    else { Serial.println("Unknown command. Type 1 for GFX test, 2 for Orient test."); }
+    while (Serial.available()) {
         int d = Serial.peek();
-        if (d == '\n' || d == '\r')
-        {
-            Serial.read();
-            break;
-        }
+        if (d == '\n' || d == '\r') { Serial.read(); break; }
         Serial.read();
     }
 }
 
+// ── setup ─────────────────────────────────────────────────────────────────────
 void setup()
 {
     Serial.begin(115200);
-    Serial.println();
-    Serial.println("Boot. Type 1 for GFX test, 2 for Orient test.");
+    Serial.println("\nBoot. Type 1 for GFX test, 2 for Orient test.");
 
     gps.begin();
-
-    // Init TFT hardware
     SPI.begin(18, -1, 23, TFT_CS);
     tft.initR(INITR_BLACKTAB);
     initTftUI();
 
-    // Init BLE transport once
-    transport.begin();
+    bleTransport.begin();
+    wifiManager.begin();
 
-    // Optional: wait briefly for iPhone at boot (but keep running regardless)
-   /* if (!waitForIPhone())
-    {
-        Serial.println("Timed out waiting for iPhone subscribe (will keep running anyway).");
-    }
-    */  // don't bother waiting for iPhone since it can be turned on/off at any time, and we handle that in loop()
+    wifiManager.onData([](const uint8_t* data, size_t len) {
+        Serial.printf("[WiFi RX] %d bytes\n", len);
+    });
 }
 
+// ── loop ──────────────────────────────────────────────────────────────────────
 void loop()
 {
-    // Keep BLE draining often
     ble.pump_BLE_txQ();
 
-    // Handle connect / disconnect edges
-    static bool lastCanSend = false;
-    bool nowCanSend = ble.canSend();
-
-    if (nowCanSend && !lastCanSend)
-    {
-        Serial.println("iPhone subscribed — initializing iPhone UI...");
-        initPhoneUI();
+    // BLE edge detection
+    static bool lastBleCanSend = false;
+    bool nowBleCanSend = ble.canSend();
+    if (nowBleCanSend && !lastBleCanSend) {
+        Serial.println("BLE iPhone connected — initialising BLE UI...");
+        initBlePhoneUI();
+    } else if (!nowBleCanSend && lastBleCanSend) {
+        Serial.println("BLE iPhone disconnected.");
+        blePhoneReady = false;
     }
-    else if (!nowCanSend && lastCanSend)
-    {
-        Serial.println("iPhone disconnected/unsubscribed.");
-        phoneReady = false;
-    }
-    lastCanSend = nowCanSend;
+    lastBleCanSend = nowBleCanSend;
 
-    // Console commands
+    // WiFi edge detection
+    static bool lastWifiCanSend = false;
+    bool nowWifiCanSend = wifiTransport.canSend();
+    if (nowWifiCanSend && !lastWifiCanSend) {
+        Serial.println("WiFi iPhone connected — initialising WiFi UI...");
+        initWifiPhoneUI();
+    } else if (!nowWifiCanSend && lastWifiCanSend) {
+        Serial.println("WiFi iPhone disconnected.");
+        wifiPhoneReady = false;
+    }
+    lastWifiCanSend = nowWifiCanSend;
+
     pollConsole();
 
-    // Telemetry update
     gps.update();
     if (gps.hasNewData())
     {
-        const GPSData &d = gps.getData();
+        const GPSData& d = gps.getData();
 
         double courseRad = d.course * (PI / 180.0);
-        double vNorth = d.speed * cos(courseRad);
-        double vEast = d.speed * sin(courseRad);
+        double vNorth    = d.speed * cos(courseRad);
+        double vEast     = d.speed * sin(courseRad);
 
-        static double prevAlt = d.alt;
+        static double   prevAlt  = d.alt;
         static uint32_t prevTime = d.timestamp;
         double climb = 0.0;
-
-        if (d.timestamp > prevTime)
-        {
+        if (d.timestamp > prevTime) {
             double dt = (d.timestamp - prevTime) / 1000.0;
-            if (dt > 0.0)
-                climb = (d.alt - prevAlt) / dt;
+            if (dt > 0.0) climb = (d.alt - prevAlt) / dt;
         }
-        prevAlt = d.alt;
+        prevAlt  = d.alt;
         prevTime = d.timestamp;
 
         TelemetryPacket pkt;
-        pkt.lat = d.lat;
-        pkt.lng = d.lng;
-        pkt.alt = d.alt;
-        pkt.speed = d.speed;
-        pkt.course = d.course;
-        pkt.vNorth = vNorth;
-        pkt.vEast = vEast;
-        pkt.climb = climb;
-        pkt.sats = d.sats;
-        pkt.hdop = d.hdop;
-        pkt.timestamp = d.timestamp;
+        pkt.lat = d.lat;   pkt.lng = d.lng;     pkt.alt    = d.alt;
+        pkt.speed = d.speed; pkt.course = d.course;
+        pkt.vNorth = vNorth; pkt.vEast = vEast;  pkt.climb  = climb;
+        pkt.sats = d.sats;   pkt.hdop  = d.hdop; pkt.timestamp = d.timestamp;
 
-        // Always local TFT
         displayTFT.renderTelemetry(pkt);
 
-        // iPhone only when ready
-        if (phoneReady && nowCanSend)
-        {
-            displayPhone.renderTelemetry(pkt);
-            iphone_tft.flush();
+        if (blePhoneReady && nowBleCanSend) {
+            displayBlePhone.renderTelemetry(pkt);
+            ble_iphone_tft.flush();
+        }
+
+        // WiFi: identical pipeline to BLE — framed graphics commands over TCP
+        if (wifiPhoneReady && nowWifiCanSend) {
+            displayWifiPhone.renderTelemetry(pkt);
+            wifi_iphone_tft.flush();
         }
     }
 }
