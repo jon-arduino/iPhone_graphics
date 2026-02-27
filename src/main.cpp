@@ -72,8 +72,8 @@ static void initWifiPhoneUI()
 
 static void runTestsOnAvailableDisplays(uint8_t which)
 {
-    if (which == '1') { Serial.println("Running GFXTest on TFT..."); runGFXTest(tft, DISP_W, DISP_H, 700); }
-    else if (which == '2') { Serial.println("Running GFXOrientTest on TFT..."); runGFXOrientTest(tft, 3000); }
+    if (which == '1') { Serial.println("Running GFXTest on TFT..."); runGFXTest(tft, DISP_W, DISP_H, 500); }
+    else if (which == '2') { Serial.println("Running GFXOrientTest on TFT..."); runGFXOrientTest(tft, 2000); }
 
     if (blePhoneReady && ble.canSend()) {
         if (which == '1') { runGFXTest(ble_iphone_tft, DISP_W, DISP_H, 700); }
@@ -129,6 +129,9 @@ void setup()
 void loop()
 {
     ble.pump_BLE_txQ();
+
+    // WiFi heartbeat — sends ping every 3s, drops connection if no pong in 9s
+    wifiManager.tick();
 
     // BLE edge detection
     static bool lastBleCanSend = false;
