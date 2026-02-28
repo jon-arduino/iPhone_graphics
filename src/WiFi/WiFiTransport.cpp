@@ -20,7 +20,7 @@ void WiFiTransport::send(const uint8_t* data, uint16_t len)
     if (canSend()) {
         _wifi.send(data, len);
     } else {
-        Serial.printf("WiFiTransport::send skipped (wifi=%d client=%d)\n",
+        Serial.printf("WiFiTransport::send skipped (wifi.isConnected=%d clientConnected=%d)\n",
                       _wifi.isConnected(), _wifi.clientConnected());
     }
 } 
