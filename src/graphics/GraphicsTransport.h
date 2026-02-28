@@ -19,5 +19,11 @@ public:
     virtual void send(const uint8_t *data, uint16_t len) = 0;
 
     // Check if the transport can send data
-    virtual bool canSend() const = 0; // Add this method for consistency (both BLE and Wi-Fi transports need it)
+    virtual bool canSend() const = 0;
+
+    // Called at logical frame boundaries by Graphics::flush().
+    // Default is no-op — transports that batch (WiFiTransport) override this
+    // to drain their accumulation buffer as a single write.
+    // BleGraphicsTransport leaves this as no-op (ring buffer handles batching).
+    virtual void flush() {}
 };

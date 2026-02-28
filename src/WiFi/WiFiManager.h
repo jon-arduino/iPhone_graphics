@@ -13,8 +13,7 @@ static constexpr uint8_t GFX_CMD_PING = 0xF0; // ESP32 → iPhone (we send)
 static constexpr uint8_t GFX_CMD_PONG = 0xF1; // iPhone → ESP32 (we receive)
 
 // Heartbeat timing
-static constexpr uint32_t PING_INTERVAL_MS = 3000; // send ping every 3s
-static constexpr uint32_t PONG_TIMEOUT_MS = 9000;  // drop connection if no pong in 9s
+// Heartbeat timing constants are set in main.cpp and passed to tick()
 
 class WiFiManager
 {
@@ -26,10 +25,11 @@ public:
     void begin();
 
     // Call from loop() — sends periodic pings, checks pong watchdog
-    void tick();
+    void tick(uint32_t pingIntervalMs, uint32_t pongTimeoutMs);
 
     bool isConnected() const;
     bool clientConnected() const { return _client != nullptr; }
+    size_t clientSpace() const { return _client ? _client->space() : 0; }
 
     // Send raw GFX bytes to iPhone (graphics pipeline, flow-controlled)
     void send(const uint8_t *data, size_t len);
@@ -39,6 +39,8 @@ public:
     void sendCmd(uint8_t cmd, const uint8_t *payload = nullptr, size_t payloadLen = 0);
 
     void onData(DataCallback cb) { _dataCallback = cb; }
+    void onDisconnected(void (*cb)()) { _onDisconnected = cb; }
+    void onFirstPong(void (*cb)()) { _onFirstPong = cb; }
 
 private:
     const char *_ssid;
@@ -50,6 +52,9 @@ private:
     AsyncClient *_client = nullptr;
 
     DataCallback _dataCallback;
+    void (*_onDisconnected)() = nullptr;
+    void (*_onFirstPong)() = nullptr;
+    bool _firstPongReceived = false;
 
     // Heartbeat state
     uint32_t _lastPingSentMs = 0;

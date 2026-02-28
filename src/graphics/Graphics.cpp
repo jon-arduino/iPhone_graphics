@@ -372,7 +372,7 @@ size_t Graphics::write(uint8_t c)
 void Graphics::flush()
 {
     sendCommand(GFX_CMD_FLUSH, nullptr, 0);
-    ble.flushTx(5000);
+    _transport.flush();
 }
 void Graphics::setRotation(uint8_t r)
 {
