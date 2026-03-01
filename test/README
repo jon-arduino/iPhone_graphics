@@ -9,3 +9,11 @@ in the development cycle.
 
 More information about PlatformIO Unit Testing:
 - https://docs.platformio.org/en/latest/advanced/unit-testing/index.html
+
+The test plan covers 90+ individual test cases across five sections:
+Section 1 — ESP32 Unit Tests (PlatformIO/Unity, all AI-generatable): Graphics encoding byte-for-byte correctness, WiFiTransport buffer accumulation and flush, ActiveTransport switching, back-channel frame parser including fragmentation and resync, BLE TX ring buffer wrap-around and overflow.
+Section 2 — iPhone Unit Tests (XCTest, all AI-generatable): GFXCommandStream frame reassembly including byte-by-byte delivery, iPhoneGFXRenderer pixel output verification, GFXDisplayView flush buffering and auto-flush timer, TransportMonitor state machine and all three WiFi diagnosis paths.
+Section 3 — Integration Tests: WiFi and BLE connection/data flow on real hardware, transport switching priority and fallback. Python serial assertion script approach described.
+Section 4 — System/E2E Tests: Full telemetry pipeline, 30-minute stability, physical TFT vs iPhone sync.
+Section 5 — Corner Cases: Eight regression tests tagged [REGRESSION] for the specific bugs fixed during this session (heap corruption, reconnect loop, clientSpace gate, buffer reset), plus protocol boundary values, heartbeat edge cases, and memory stress.
+Appendix: Four copy-paste AI prompt templates — ESP32 unit test, iPhone XCTest, Python serial log asserter, and GPS NMEA simulator — each designed to be dropped into a new AI session with architecture.md as context.
