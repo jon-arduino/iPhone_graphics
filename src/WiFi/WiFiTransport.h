@@ -1,23 +1,31 @@
 #pragma once
-
+#include <vector>
 #include "graphics/GraphicsTransport.h"
 #include "WiFiManager.h"
-#include <vector>
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Auto-flush timing constant — visible and adjustable from main.cpp:
+//  WiFiTransport — GraphicsTransport adapter for TCP/WiFi
 //
-//    WiFiTransport wifiTransport(wifiManager);
-//    wifiTransport.setAutoFlushMs(WIFI_AUTO_FLUSH_MS);
+//  Sits between the graphics pipeline and WiFiManager. Accumulates GFX bytes
+//  into an internal buffer and sends them as a single TCP write on flush().
+//  This batching is important — many small TCP writes cause head-of-line
+//  blocking and Nagle algorithm delays on iOS.
 //
-//  If no explicit flush() arrives within this many milliseconds of the last
-//  send(), the accumulated buffer is sent automatically. This catches graphics
-//  code that never calls flush() and ensures nothing gets stuck.
+//  Send flow:
+//    send()  → accumulate into _txBuf, reset auto-flush timer
+//    flush() → send entire _txBuf as one WiFiManager::send() call
+//              called explicitly at frame boundaries
+//    tick()  → call from loop() — triggers auto-flush if bytes have been
+//              sitting idle longer than _autoFlushMs. Catches code paths
+//              that never call flush() explicitly.
+//    reset() → discard _txBuf without sending — called on disconnect
+//              to prevent stale bytes reaching the next connection's stream
 //
-//  Guidelines:
-//    > ping interval (3000ms)  — never, would starve heartbeat
-//    < frame render time       — never, would split frames mid-draw
-//    50ms                      — good default: imperceptible lag, safe margin
+//  Auto-flush timing:
+//    Set via setAutoFlushMs() from setup(). Default 50ms.
+//    Must be: > single frame render time (~10ms)
+//             < ping interval (3000ms)
+//    Mirror GFXAutoFlushIntervalSeconds on the iPhone side.
 // ─────────────────────────────────────────────────────────────────────────────
 
 class WiFiTransport : public GraphicsTransport
@@ -25,26 +33,34 @@ class WiFiTransport : public GraphicsTransport
 public:
     explicit WiFiTransport(WiFiManager &wifi);
 
+    // Initialise internal buffer — stack init handled by WiFiManager::begin().
     void begin() override;
+
+    // True when WiFi is connected and a TCP client is attached.
     bool canSend() const override;
 
-    // Accumulate bytes into local buffer — do NOT send immediately
+    // Accumulate bytes — nothing sent to TCP until flush() or auto-flush.
     void send(const uint8_t *data, uint16_t len) override;
 
-    // Drain accumulated buffer as one TCP write (explicit frame boundary)
+    // Send entire accumulated buffer as one TCP write.
+    // No-op if buffer is empty. Discards buffer if link is down.
     void flush() override;
 
-    // Set auto-flush timeout in milliseconds (call from main/setup)
-    void setAutoFlushMs(uint32_t ms) { _autoFlushMs = ms; }
+    // Discard buffered bytes without sending.
+    // Call on disconnect — prevents stale frame data reaching next session.
+    void reset() override;
 
-    // Call from loop() — triggers auto-flush if buffer has been sitting too long
+    // Call from loop() every iteration — triggers auto-flush on idle timeout.
     void tick();
+
+    // Configure auto-flush timeout. Call from setup() after construction.
+    void setAutoFlushMs(uint32_t ms) { _autoFlushMs = ms; }
 
 private:
     WiFiManager &_wifi;
     std::vector<uint8_t> _txBuf;
     uint32_t _lastSendMs = 0;
-    uint32_t _autoFlushMs = 50; // default, override via setAutoFlushMs()
+    uint32_t _autoFlushMs = 50;
 
     static constexpr size_t TX_BUF_RESERVE = 4096;
 };

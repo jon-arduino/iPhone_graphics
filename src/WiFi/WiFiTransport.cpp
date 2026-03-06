@@ -16,17 +16,14 @@ bool WiFiTransport::canSend() const
     return _wifi.isConnected() && _wifi.clientConnected();
 }
 
-// Accumulate GFX bytes — nothing sent to TCP until flush() or auto-flush.
 void WiFiTransport::send(const uint8_t *data, uint16_t len)
 {
-    if (!canSend() || len == 0)
+    if (!canSend() || !data || len == 0)
         return;
     _txBuf.insert(_txBuf.end(), data, data + len);
-    _lastSendMs = millis(); // reset auto-flush timer on every write
+    _lastSendMs = millis();
 }
 
-// Explicit flush — called by Graphics::flush() at logical frame boundaries.
-// Sends entire accumulated buffer as ONE TCP write.
 void WiFiTransport::flush()
 {
     if (_txBuf.empty())
@@ -38,19 +35,20 @@ void WiFiTransport::flush()
     }
     else
     {
-        // Not connected — discard stale frame rather than accumulate indefinitely
         Serial.printf("[WiFiTransport] flush discarded %d bytes (not connected)\n",
                       (int)_txBuf.size());
     }
 
     _txBuf.clear();
-    _lastSendMs = 0; // clear timer — nothing pending
+    _lastSendMs = 0;
 }
 
-// Call from loop() every iteration.
-// Triggers auto-flush if bytes have been sitting longer than _autoFlushMs
-// without an explicit flush() arriving. Catches graphics code that never
-// calls flush() and prevents the buffer from stalling indefinitely.
+void WiFiTransport::reset()
+{
+    _txBuf.clear();
+    _lastSendMs = 0;
+}
+
 void WiFiTransport::tick()
 {
     if (_txBuf.empty() || _lastSendMs == 0)

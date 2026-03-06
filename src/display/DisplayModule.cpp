@@ -25,6 +25,7 @@ void DisplayModule::begin(uint8_t rotation)
     _d.setTextSize(1);
     _d.setCursor(10, 30);
     _d.print("System Ready");
+    delay(500);
 
     // Clear banner screen (matches your old behavior)
     _d.fillScreen(ST77XX_BLACK);

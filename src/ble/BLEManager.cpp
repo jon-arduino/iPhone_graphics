@@ -8,10 +8,8 @@
 void BLEManager::ServerCB::onConnect(NimBLEServer *, NimBLEConnInfo &connInfo)
 {
     _owner->_connected = true;
-    _owner->_txClear();
+    _owner->_notifySubscribed = false;
     _owner->_bcLen = 0;
-    _owner->_waitingForPong = false;
-    _owner->_lastPingSentMs = millis();
     Serial.println("[BLE] connected");
     Serial.print("[BLE] peer: ");
     Serial.println(connInfo.getAddress().toString().c_str());
@@ -23,8 +21,8 @@ void BLEManager::ServerCB::onDisconnect(NimBLEServer *, NimBLEConnInfo &, int re
     _owner->_notifySubscribed = false;
     _owner->_cccdNotify = false;
     _owner->_cccdIndicate = false;
-    _owner->_waitingForPong = false;
-    _owner->_txClear();
+    // Give semaphore so any sendBytes() blocked in the wait loop can exit
+    xSemaphoreGive(_owner->_txDone);
     Serial.printf("[BLE] disconnected reason=%d\n", reason);
     _owner->startAdvertising();
 }
@@ -49,245 +47,85 @@ void BLEManager::TxCharCB::onSubscribe(NimBLECharacteristic *,
 
     if (_owner->_notifySubscribed)
     {
-        _owner->_lastNotifyMicros = 0;
-        _owner->_txInFlight = false;
-        _owner->_pendingLen = 0;
+        // Ensure semaphore starts available so first sendBytes() can proceed
+        xSemaphoreGive(_owner->_txDone);
     }
+
+    if (_owner->_subscribedCallback)
+        _owner->_subscribedCallback(_owner->_notifySubscribed);
 }
 
+// Called by NimBLE stack when a notification/indication is acknowledged.
+// Gives the semaphore so sendBytes() can send the next chunk.
 void BLEManager::TxCharCB::onStatus(NimBLECharacteristic *, int code)
 {
-    if (_owner->_txInFlight && _owner->_pendingLen > 0)
-    {
-        if (code == 0)
-        {
-            _owner->_txTail = (_owner->_txTail + _owner->_pendingLen) % BLEManager::TX_Q_SIZE;
-        }
-    }
-    _owner->_pendingCode = code;
-    _owner->_pendingLen = 0;
-    _owner->_txInFlight = false;
+    _owner->_lastStatusCode = code;
+    if (code != 0)
+        Serial.printf("[BLE] onStatus error=%d\n", code);
+    xSemaphoreGive(_owner->_txDone);
 }
 
 void BLEManager::RxCharCB::onWrite(NimBLECharacteristic *pChar, NimBLEConnInfo &)
 {
     std::string v = pChar->getValue();
     size_t n = v.size();
-
-    // Route to back-channel parser first (handles pong frames)
-    _owner->processBackChannel(
-        reinterpret_cast<const uint8_t *>(v.data()), n);
-
-    // Also copy to RX buffer for application use
-    if (n > BLEManager::RX_BUF_SIZE)
-        n = BLEManager::RX_BUF_SIZE;
+    _owner->processBackChannel(reinterpret_cast<const uint8_t *>(v.data()), n);
+    if (n > RX_BUF_SIZE)
+        n = RX_BUF_SIZE;
     memcpy(_owner->rxBuf, v.data(), n);
     _owner->rxLen = n;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  BLEManager methods
+//  BLEManager
 // ─────────────────────────────────────────────────────────────────────────────
 
-BLEManager::BLEManager() {}
+BLEManager::BLEManager()
+{
+    // Binary semaphore — starts taken. Given by onSubscribe (ready to send)
+    // and onStatus (previous chunk acknowledged). Taken by sendBytes().
+    _txDone = xSemaphoreCreateBinary();
+    configASSERT(_txDone);
+}
 
 void BLEManager::begin()
 {
-    NimBLEDevice::init("ESP32-Telemetry");
+    NimBLEDevice::init("ESP32-GPS");
     NimBLEDevice::setPower(ESP_PWR_LVL_P9);
 
-    Serial.print("[BLE] MAC: ");
-    Serial.println(NimBLEDevice::getAddress().toString().c_str());
+    Serial.printf("[BLE] MAC: %s\n", NimBLEDevice::getAddress().toString().c_str());
 
     pServer = NimBLEDevice::createServer();
+    pServer->setCallbacks(new ServerCB(this));
 
-    static BLEManager::ServerCB serverCB(this);
-    static BLEManager::TxCharCB txCB(this);
-    static BLEManager::RxCharCB rxCB(this);
-    pServer->setCallbacks(&serverCB);
+    NimBLEService *pService = pServer->createService(SERVICE_UUID);
 
-    NimBLEService *service = pServer->createService(NimBLEUUID(SERVICE_UUID));
+    pTxChar = pService->createCharacteristic(
+        TX_CHARACTERISTIC_UUID,
+        NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::INDICATE);
+    pTxChar->setCallbacks(new TxCharCB(this));
 
-    pTxChar = service->createCharacteristic(
-        NimBLEUUID(TX_CHARACTERISTIC_UUID),
-        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::INDICATE);
-    pTxChar->setCallbacks(&txCB);
-    pTxChar->addDescriptor(new NimBLE2904());
-
-    pRxChar = service->createCharacteristic(
-        NimBLEUUID(RX_CHARACTERISTIC_UUID),
+    pRxChar = pService->createCharacteristic(
+        RX_CHARACTERISTIC_UUID,
         NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
-    pRxChar->setCallbacks(&rxCB);
+    pRxChar->setCallbacks(new RxCharCB(this));
 
-    service->start();
-
-    NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
-    adv->reset();
-    NimBLEAdvertisementData advData;
-    advData.setFlags(BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP);
-    advData.addServiceUUID(NimBLEUUID(SERVICE_UUID));
-    adv->setAdvertisementData(advData);
-    NimBLEAdvertisementData scanResp;
-    scanResp.setName("ESP32-Telemetry");
-    adv->setScanResponseData(scanResp);
-    adv->setMinInterval(48);
-    adv->setMaxInterval(160);
-    adv->start();
-
-    Serial.println("[BLE] advertising started");
-    _txClear();
+    pService->start();
+    startAdvertising();
 }
 
 void BLEManager::startAdvertising()
 {
     NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
-    adv->stop();
+    adv->addServiceUUID(SERVICE_UUID);
+
+    NimBLEAdvertisementData scanResp;
+    scanResp.setName("ESP32-GPS");
+    adv->setScanResponseData(scanResp);
+    adv->setMinInterval(48);
+    adv->setMaxInterval(160);
     adv->start();
-    Serial.println("[BLE] advertising restarted");
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Heartbeat — call from loop()
-//  Sends ping every pingIntervalMs, logs lateness thresholds.
-//  Unlike WiFi we don't drop the connection on pong timeout — the BLE stack
-//  handles disconnection. We log the problem and let the stack recover.
-// ─────────────────────────────────────────────────────────────────────────────
-void BLEManager::tick(uint32_t pingIntervalMs, uint32_t pongTimeoutMs)
-{
-    if (!canSend())
-    {
-        _waitingForPong = false;
-        _lastPingSentMs = 0;
-        _loggedThresholds = 0;
-        return;
-    }
-
-    uint32_t now = millis();
-
-    // Send ping on interval
-    if (now - _lastPingSentMs >= pingIntervalMs)
-    {
-        sendPing();
-        _lastPingSentMs = now;
-        _waitingForPong = true;
-        _loggedThresholds = 0;
-    }
-
-    // Log threshold crossings while waiting for pong
-    if (_waitingForPong)
-    {
-        uint32_t elapsed = now - _lastPingSentMs;
-
-        if (elapsed >= 500 && !(_loggedThresholds & 1))
-        {
-            _loggedThresholds |= 1;
-            Serial.printf("[BLE] Pong late by %ums — loop may be slow\n", elapsed);
-        }
-        if (elapsed >= 1500 && !(_loggedThresholds & 2))
-        {
-            _loggedThresholds |= 2;
-            Serial.printf("[BLE] Pong late by %ums — WARNING: significantly delayed\n", elapsed);
-        }
-        if (elapsed >= 6000 && !(_loggedThresholds & 4))
-        {
-            _loggedThresholds |= 4;
-            Serial.printf("[BLE] Pong late by %ums — CRITICAL\n", elapsed);
-        }
-
-        // Log timeout but don't drop — BLE stack manages the connection
-        if (elapsed >= pongTimeoutMs && !(_loggedThresholds & 8))
-        {
-            _loggedThresholds |= 8;
-            Serial.printf("[BLE] Pong timeout (%ums) — BLE stack will disconnect if link is dead\n",
-                          pongTimeoutMs);
-        }
-    }
-}
-
-void BLEManager::sendPing()
-{
-    if (!canSend())
-        return;
-    // Send directly via sendBytes — will be queued in TX ring and sent as BLE notification
-    uint8_t frame[4] = {BLE_GFX_MAGIC, 0x01, 0x00, BLE_GFX_CMD_PING};
-    sendBytes(frame, 4);
-}
-
-void BLEManager::pongReceived()
-{
-    _waitingForPong = false;
-    _loggedThresholds = 0;
-    Serial.println("[BLE] PONG received");
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Back-channel parser (iPhone → ESP32 via RX characteristic)
-//  Framing: [0xA5][lenLow][lenHigh][cmd][payload...]
-//  Handles BLE_GFX_CMD_PONG (0xF1) internally.
-// ─────────────────────────────────────────────────────────────────────────────
-void BLEManager::processBackChannel(const uint8_t *data, size_t len)
-{
-    for (size_t i = 0; i < len; i++)
-    {
-        uint8_t b = data[i];
-
-        if (_bcLen == 0)
-        {
-            if (b != BLE_GFX_MAGIC)
-                continue;
-        }
-
-        if (_bcLen < sizeof(_bcBuf))
-        {
-            _bcBuf[_bcLen++] = b;
-        }
-        else
-        {
-            Serial.println("[BLE BackChannel] Buffer overrun — resync");
-            _bcLen = 0;
-            continue;
-        }
-
-        if (_bcLen < 3)
-            continue;
-
-        uint16_t frameLen = (uint16_t)_bcBuf[1] | ((uint16_t)_bcBuf[2] << 8);
-        size_t totalSize = 3 + frameLen;
-
-        if (frameLen < 1 || totalSize > sizeof(_bcBuf))
-        {
-            Serial.printf("[BLE BackChannel] Invalid len=%d — resync\n", frameLen);
-            _bcLen = 0;
-            continue;
-        }
-
-        if (_bcLen < totalSize)
-            continue;
-
-        uint8_t cmd = _bcBuf[3];
-        _bcLen = 0;
-
-        switch (cmd)
-        {
-        case BLE_GFX_CMD_PONG:
-            pongReceived();
-            break;
-        default:
-            break;
-        }
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  TX ring buffer
-// ─────────────────────────────────────────────────────────────────────────────
-
-uint16_t BLEManager::effectiveChunkSize() const
-{
-    uint16_t maxPayload = (_mtu > 23) ? (_mtu - 3) : 20;
-    if (maxPayload > 120)
-        maxPayload = 120;
-    return maxPayload;
+    Serial.println("[BLE] advertising started");
 }
 
 bool BLEManager::canSend() const
@@ -295,128 +133,138 @@ bool BLEManager::canSend() const
     return _connected && _notifySubscribed && (pTxChar != nullptr);
 }
 
-size_t BLEManager::_txCount() const
+uint16_t BLEManager::effectiveChunkSize() const
 {
-    size_t h = _txHead, t = _txTail;
-    return (h >= t) ? (h - t) : (TX_Q_SIZE - t + h);
+    uint16_t maxPayload = (_mtu > 23) ? (_mtu - 3) : 20;
+    return (maxPayload > 180) ? 180 : maxPayload;
 }
 
-size_t BLEManager::_txSpace() const
-{
-    return (TX_Q_SIZE - 1) - _txCount();
-}
-
-void BLEManager::_txClear()
-{
-    _txHead = 0;
-    _txTail = 0;
-    _txInFlight = false;
-    _pendingLen = 0;
-    _pendingCode = 0;
-}
-
-size_t BLEManager::_txEnqueueSome(const uint8_t *data, size_t len)
-{
-    if (!data || len == 0 || !canSend())
-        return 0;
-    size_t space = _txSpace();
-    if (space == 0)
-        return 0;
-    size_t n = (len > space) ? space : len;
-    size_t h = _txHead;
-    size_t first = min(n, TX_Q_SIZE - h);
-    memcpy(&_txQ[h], data, first);
-    if (n > first)
-        memcpy(&_txQ[0], data + first, n - first);
-    _txHead = (h + n) % TX_Q_SIZE;
-    return n;
-}
-
-void BLEManager::_txDrain()
-{
-    if (!canSend() || _txInFlight)
-        return;
-    size_t available = _txCount();
-    if (available == 0)
-        return;
-
-    uint32_t now = micros();
-    if (_lastNotifyMicros != 0 && (now - _lastNotifyMicros) < MIN_GAP_US)
-        return;
-
-    uint8_t tmp[180];
-    uint16_t chunkMax = min<uint16_t>(effectiveChunkSize(), sizeof(tmp));
-    uint16_t chunk = (available > chunkMax) ? chunkMax : (uint16_t)available;
-
-    size_t t = _txTail;
-    size_t first = min((size_t)chunk, TX_Q_SIZE - t);
-    memcpy(tmp, &_txQ[t], first);
-    if ((size_t)chunk > first)
-        memcpy(tmp + first, &_txQ[0], chunk - first);
-
-    pTxChar->setValue(tmp, chunk);
-
-    bool ok = false;
-    if (_cccdIndicate)
-        ok = pTxChar->indicate();
-    else if (_cccdNotify)
-        ok = pTxChar->notify();
-    else
-        return;
-
-    if (!ok)
-        return;
-
-    _pendingLen = chunk;
-    _txInFlight = true;
-    _lastNotifyMicros = now;
-}
-
+// ─────────────────────────────────────────────────────────────────────────────
+//  sendBytes — the entire send path, no ring buffer
+//
+//  Splits data into MTU-sized chunks. For each chunk:
+//    1. Take _txDone semaphore (blocks until previous chunk is ACKed, or
+//       until connection drops which gives the semaphore from onDisconnect)
+//    2. Call notify/indicate
+//    3. onStatus() gives _txDone when ACK arrives → next chunk proceeds
+//
+//  This is exactly the flow BLE is designed for. The stack paces us naturally.
+// ─────────────────────────────────────────────────────────────────────────────
 void BLEManager::sendBytes(const uint8_t *data, uint16_t len)
 {
-    if (!data || len == 0 || !canSend())
+    if (!data || len == 0)
         return;
-    size_t off = 0;
+
+    uint16_t chunk = effectiveChunkSize();
+    uint16_t off = 0;
+
     while (off < len)
     {
-        size_t pushed = _txEnqueueSome(data + off, len - off);
-        off += pushed;
-        _txDrain();
-        if (_txInFlight)
-            vTaskDelay(0);
-        if (off < len)
-            vTaskDelay(1);
+        if (!canSend())
+            return;
+
+        uint16_t n = min(chunk, (uint16_t)(len - off));
+
+        // Wait for previous ACK (or disconnect). Timeout 2s as safety net.
+        if (xSemaphoreTake(_txDone, pdMS_TO_TICKS(2000)) != pdTRUE)
+        {
+            Serial.println("[BLE] sendBytes timeout waiting for ACK");
+            return;
+        }
+
+        if (!canSend())
+            return;
+
+        _lastStatusCode = 0; // clear before each attempt
+        pTxChar->setValue(data + off, n);
+
+        bool ok = false;
+        if (_cccdIndicate)
+            ok = pTxChar->indicate();
+        else if (_cccdNotify)
+            ok = pTxChar->notify();
+
+        if (!ok)
+        {
+            // notify() rejected before reaching stack — give semaphore back and retry
+            xSemaphoreGive(_txDone);
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+
+        // onStatus() sets _lastStatusCode and gives _txDone when ACK/error arrives.
+        // On error (BLE_HS_ENOMEM=6 etc.) back off and retry the same chunk.
+        if (_lastStatusCode != 0)
+        {
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue; // don't advance off — resend same chunk
+        }
+
+        off += n; // success
     }
 }
-
-void BLEManager::pump_BLE_txQ() { _txDrain(); }
-
-bool BLEManager::flushTx(uint32_t timeoutMs)
-{
-    uint32_t start = millis();
-    while (millis() - start < timeoutMs)
-    {
-        _txDrain();
-        if (_txCount() == 0 && !_txInFlight)
-            return true;
-        vTaskDelay(1);
-    }
-    return false;
-}
-
-size_t BLEManager::txQueuedBytes() const { return _txCount(); }
-size_t BLEManager::txFreeBytes() const { return _txSpace(); }
 
 bool BLEManager::hasRxData() const { return rxLen > 0; }
 
 size_t BLEManager::readRx(uint8_t *dst, size_t maxLen)
 {
-    size_t n = rxLen;
-    if (n == 0)
-        return 0;
-    if (n > maxLen)
-        n = maxLen;
+    size_t n = (rxLen < maxLen) ? rxLen : maxLen;
     memcpy(dst, rxBuf, n);
     rxLen = 0;
     return n;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Back-channel parser (iPhone → ESP32)
+// ─────────────────────────────────────────────────────────────────────────────
+void BLEManager::processBackChannel(const uint8_t *data, size_t len)
+{
+    for (size_t i = 0; i < len; i++)
+    {
+        uint8_t b = data[i];
+        if (_bcLen == 0)
+        {
+            if (b != BC_MAGIC)
+                continue;
+        }
+        if (_bcLen < sizeof(_bcBuf))
+        {
+            _bcBuf[_bcLen++] = b;
+        }
+        else
+        {
+            _bcLen = 0;
+            continue;
+        }
+        if (_bcLen < 3)
+            continue;
+
+        uint16_t frameLen = (uint16_t)_bcBuf[1] | ((uint16_t)_bcBuf[2] << 8);
+        size_t totalSize = 3 + frameLen;
+        if (frameLen < 1 || totalSize > sizeof(_bcBuf))
+        {
+            _bcLen = 0;
+            continue;
+        }
+        if (_bcLen < totalSize)
+            continue;
+
+        uint8_t cmd = _bcBuf[3];
+        switch (cmd)
+        {
+        case BC_CMD_KEY1:
+            Serial.println("[BackChannel] KEY1");
+            if (_keyCallback)
+                _keyCallback('1');
+            break;
+        case BC_CMD_KEY2:
+            Serial.println("[BackChannel] KEY2");
+            if (_keyCallback)
+                _keyCallback('2');
+            break;
+        default:
+            break;
+        }
+        _bcLen = 0;
+    }
 }

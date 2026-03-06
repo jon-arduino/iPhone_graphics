@@ -27,11 +27,11 @@ void Display_iPhone::begin()
 
     _gfx.setTextSize(1);
     _gfx.setCursor(10, 30);
-    _gfx.print("System Ready");
+    _gfx.print("System Ready...");
 
     // If you want the banner visible briefly, uncomment:
-    // _gfx.flush();
-    // delay(800);
+     _gfx.flush();
+     delay(500);
 
     _gfx.clear(C_BLACK);
 

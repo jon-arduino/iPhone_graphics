@@ -3,17 +3,11 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <AsyncTCP.h>
+#include <freertos/semphr.h>
+
+#include "Protocol.h"
 
 using DataCallback = std::function<void(const uint8_t *data, size_t len)>;
-
-// Back-channel protocol opcodes
-// Framing: [0xA5][lenLow][lenHigh][cmd][payload...]
-static constexpr uint8_t GFX_MAGIC = 0xA5;
-static constexpr uint8_t GFX_CMD_PING = 0xF0; // ESP32 → iPhone (we send)
-static constexpr uint8_t GFX_CMD_PONG = 0xF1; // iPhone → ESP32 (we receive)
-
-// Heartbeat timing
-// Heartbeat timing constants are set in main.cpp and passed to tick()
 
 class WiFiManager
 {
@@ -24,21 +18,36 @@ public:
 
     void begin();
 
-    // Call from loop() — sends periodic pings, checks pong watchdog
-    void tick(uint32_t pingIntervalMs, uint32_t pongTimeoutMs);
+    // ── Configuration ─────────────────────────────────────────────────────────
+    void setHeartbeat(uint32_t pingIntervalMs, uint32_t pongTimeoutMs)
+    {
+        _pingIntervalMs = pingIntervalMs;
+        _pongTimeoutMs = pongTimeoutMs;
+    }
 
+    // ── Status ────────────────────────────────────────────────────────────────
     bool isConnected() const;
     bool clientConnected() const { return _client != nullptr; }
     size_t clientSpace() const { return _client ? _client->space() : 0; }
 
-    // Send raw GFX bytes to iPhone (graphics pipeline, flow-controlled)
+    // ── GFX data send (any task, serialised by _writeMutex) ───────────────────
+    // Takes _writeMutex, writes all bytes, checks _pingNeeded before releasing.
+    // A pending ping will be sent at the clean frame boundary before unlock.
     void send(const uint8_t *data, size_t len);
     void send(const char *str);
 
-    // Send a framed back-channel command: [0xA5][lenLow][lenHigh][cmd][payload...]
+    // Framed back-channel command (used internally for ping; public for sendCmd)
     void sendCmd(uint8_t cmd, const uint8_t *payload = nullptr, size_t payloadLen = 0);
 
+    // ── Heartbeat + maintenance (heartbeat task, ~100ms) ──────────────────────
+    // Checks ping interval, sets _pingNeeded, tries to send ping.
+    // Pong watchdog. Safe to call from any task.
+    void update();
+
+    // ── Callbacks ─────────────────────────────────────────────────────────────
     void onData(DataCallback cb) { _dataCallback = cb; }
+    void onKey(void (*cb)(uint8_t key)) { _keyCallback = cb; }
+    void onConnected(void (*cb)()) { _onConnected = cb; }
     void onDisconnected(void (*cb)()) { _onDisconnected = cb; }
     void onFirstPong(void (*cb)()) { _onFirstPong = cb; }
 
@@ -51,25 +60,36 @@ private:
     AsyncServer *_server = nullptr;
     AsyncClient *_client = nullptr;
 
+    // ── Write serialisation ───────────────────────────────────────────────────
+    // Taken by any task writing to _client. Ensures GFX data and pings never
+    // interleave — a ping always lands at a clean frame boundary.
+    SemaphoreHandle_t _writeMutex = nullptr;
+
+    // ── Heartbeat state ───────────────────────────────────────────────────────
+    uint32_t _pingIntervalMs = 3000;
+    uint32_t _pongTimeoutMs = 9000;
+    uint32_t _lastPingSentMs = 0;
+    bool _waitingForPong = false;
+    bool _pingNeeded = false; // set when interval elapses, cleared when sent
+    uint8_t _loggedThresholds = 0;
+
+    // ── Callbacks ─────────────────────────────────────────────────────────────
     DataCallback _dataCallback;
+    void (*_keyCallback)(uint8_t key) = nullptr;
+    void (*_onConnected)() = nullptr;
     void (*_onDisconnected)() = nullptr;
     void (*_onFirstPong)() = nullptr;
     bool _firstPongReceived = false;
 
-    // Heartbeat state
-    uint32_t _lastPingSentMs = 0;
-    bool _waitingForPong = false;
-    uint8_t _loggedThresholds = 0; // bitmask: bit0=500ms, bit1=1500ms, bit2=6000ms
-
-    // Back-channel parser state (iPhone → ESP32 framed messages)
+    // ── Back-channel parser ───────────────────────────────────────────────────
     uint8_t _bcBuf[64];
     size_t _bcLen = 0;
 
+    // ── Internals ─────────────────────────────────────────────────────────────
+    void sendPingNow(); // sends ping — caller MUST hold _writeMutex
     void startMDNS();
     void startTCPServer();
     void onClientConnected(AsyncClient *client);
     void dropClient(const char *reason);
-
-    // Parse incoming back-channel bytes; handles pong internally
     void processBackChannel(const uint8_t *data, size_t len);
 };
