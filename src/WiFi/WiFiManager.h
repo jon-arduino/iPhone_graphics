@@ -6,6 +6,7 @@
 #include <freertos/semphr.h>
 
 #include "Protocol.h"
+#include "BackChannelParser.h"
 
 using DataCallback = std::function<void(const uint8_t *data, size_t len)>;
 
@@ -46,10 +47,12 @@ public:
 
     // ── Callbacks ─────────────────────────────────────────────────────────────
     void onData(DataCallback cb) { _dataCallback = cb; }
-    void onKey(void (*cb)(uint8_t key)) { _keyCallback = cb; }
     void onConnected(void (*cb)()) { _onConnected = cb; }
     void onDisconnected(void (*cb)()) { _onDisconnected = cb; }
     void onFirstPong(void (*cb)()) { _onFirstPong = cb; }
+    // Forwarded to BackChannelParser:
+    void onKey(void (*cb)(uint8_t key)) { _bc.onKey(cb); }
+    void onTouch(void (*cb)(uint8_t cmd, int16_t x, int16_t y)) { _bc.onTouch(cb); }
 
 private:
     const char *_ssid;
@@ -75,21 +78,18 @@ private:
 
     // ── Callbacks ─────────────────────────────────────────────────────────────
     DataCallback _dataCallback;
-    void (*_keyCallback)(uint8_t key) = nullptr;
     void (*_onConnected)() = nullptr;
     void (*_onDisconnected)() = nullptr;
     void (*_onFirstPong)() = nullptr;
     bool _firstPongReceived = false;
 
     // ── Back-channel parser ───────────────────────────────────────────────────
-    uint8_t _bcBuf[64];
-    size_t _bcLen = 0;
+    BackChannelParser _bc;
 
     // ── Internals ─────────────────────────────────────────────────────────────
-    void sendPingNow(); // sends ping — caller MUST hold _writeMutex
+    void sendPingNow();
     void startMDNS();
     void startTCPServer();
     void onClientConnected(AsyncClient *client);
     void dropClient(const char *reason);
-    void processBackChannel(const uint8_t *data, size_t len);
 };

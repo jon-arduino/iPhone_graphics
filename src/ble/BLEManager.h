@@ -1,9 +1,11 @@
 #pragma once
 
 #include <Arduino.h>
+#include <functional>
 #include <NimBLEDevice.h>
 #include <freertos/semphr.h>
 #include "Protocol.h"
+#include "BackChannelParser.h"
 
 // Nordic UART Service UUIDs
 static const char *SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
@@ -30,8 +32,9 @@ public:
     // Kept so call sites in main.cpp compile without change.
     void update() {}
 
-    // Callbacks
-    void onKey(void (*cb)(uint8_t key)) { _keyCallback = cb; }
+    // Callbacks — forwarded to BackChannelParser or handled locally
+    void onKey(std::function<void(uint8_t)> cb) { _bc.onKey(cb); }
+    void onTouch(std::function<void(uint8_t, int16_t, int16_t)> cb) { _bc.onTouch(cb); }
     void onSubscribed(void (*cb)(bool ready)) { _subscribedCallback = cb; }
 
     // RX
@@ -64,13 +67,10 @@ private:
     uint8_t rxBuf[RX_BUF_SIZE];
     volatile size_t rxLen = 0;
 
-    // Back-channel parser (iPhone -> ESP32)
-    uint8_t _bcBuf[16];
-    size_t _bcLen = 0;
-    void processBackChannel(const uint8_t *data, size_t len);
+    // Back-channel parser — framing and dispatch shared with WiFiManager
+    BackChannelParser _bc;
 
-    void (*_keyCallback)(uint8_t key) = nullptr;
-    void (*_subscribedCallback)(bool) = nullptr;
+    void (*_subscribedCallback)(bool ready) = nullptr;
 
     class ServerCB : public NimBLEServerCallbacks
     {

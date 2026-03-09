@@ -1,0 +1,2 @@
+# Increase NimBLE mbuf pool to prevent BLE_HS_ENOMEM during sustained notifications
+CONFIG_BT_NIMBLE_MSYS1_BLOCK_COUNT=20

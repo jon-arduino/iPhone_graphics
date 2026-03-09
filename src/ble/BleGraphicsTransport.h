@@ -1,65 +1,71 @@
 #pragma once
-#include <vector>
 #include "graphics/GraphicsTransport.h"
 #include "BLEManager.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  BleGraphicsTransport — GraphicsTransport adapter for BLE
 //
-//  Sits between the graphics pipeline and BLEManager. Its primary job is
-//  coalescing — GFX draw calls produce many small byte sequences (3-10 bytes
-//  each). Sending each as a separate BLE notification wastes bandwidth and
-//  exhausts NimBLE's mbuf pool. This transport accumulates writes into an
-//  internal buffer and only calls BLEManager::sendBytes() at flush points.
+//  Coalesces small GFX draw calls into a static buffer before sending.
+//  Each drawing primitive encodes to a small fixed payload (3-20 bytes).
+//  Without coalescing, drawCircle would trigger 300+ individual BLE sends,
+//  exhausting the NimBLE mbuf pool. With a 2KB buffer, the entire circle
+//  accumulates before any BLE send occurs.
+//
+//  Buffer sizing (AUTO_FLUSH_BYTES):
+//    - All primitives except drawBitmap are ≤20 bytes per send() call,
+//      so a 2KB buffer is safe as a static array with no overflow risk.
+//    - drawBitmap with a large bitmap could exceed 2KB in a single send()
+//      call — guarded by an assert in send().
+//    - 2KB = ~8 MTU chunks. BLEManager::sendBytes() splits and paces them.
+//
+//  Memory: 2KB in BSS (static). No heap allocation, no fragmentation.
 //
 //  Send flow:
-//    send()  → accumulate into _buf
-//              auto-flush when _buf reaches one full MTU chunk
-//    flush() → send entire _buf as one BLEManager::sendBytes() call
-//              called explicitly at frame boundaries (end of renderTelemetry,
-//              end of GFX scene, etc.)
-//    reset() → discard _buf without sending — called on disconnect
-//
-//  BLEManager::sendBytes() handles all BLE-level pacing internally:
-//  one notification per ACK, semaphore-gated, with retry on error=6.
+//    send()  → append to _buf, auto-flush when _bufLen >= AUTO_FLUSH_BYTES
+//    flush() → sendBytes(_buf, _bufLen), reset _bufLen = 0
+//    reset() → _bufLen = 0, no send (called on disconnect)
 // ─────────────────────────────────────────────────────────────────────────────
+
+static constexpr uint16_t AUTO_FLUSH_BYTES = 4096;
 
 class BleGraphicsTransport : public GraphicsTransport
 {
 public:
-    explicit BleGraphicsTransport(BLEManager &ble) : _ble(ble) {}
+    explicit BleGraphicsTransport(BLEManager &ble) : _ble(ble), _bufLen(0) {}
 
-    // Initialise the BLE stack — called once from setup().
     void begin() override { _ble.begin(); }
-
-    // True when BLE is connected and iPhone has subscribed to TX characteristic.
     bool canSend() const override { return _ble.canSend(); }
 
-    // Accumulate bytes into buffer. Auto-flushes when a full MTU chunk is ready.
     void send(const uint8_t *data, uint16_t len) override
     {
         if (!canSend() || !data || len == 0)
             return;
-        _buf.insert(_buf.end(), data, data + len);
-        if (_buf.size() >= _ble.effectiveChunkSize())
+
+        // Guard: a single send() call must never exceed the buffer.
+        // All GFX primitives are ≤20 bytes. Only drawBitmap could be large.
+        configASSERT(len <= AUTO_FLUSH_BYTES);
+
+        if (_bufLen + len > AUTO_FLUSH_BYTES)
+            flush();
+        memcpy(_buf + _bufLen, data, len);
+        _bufLen += len;
+        if (_bufLen >= AUTO_FLUSH_BYTES)
             flush();
     }
 
-    // Send buffered bytes to BLEManager as one contiguous block.
-    // BLEManager splits into MTU chunks and paces with ACK gating internally.
     void flush() override
     {
-        if (_buf.empty())
+        if (_bufLen == 0)
             return;
         if (canSend())
-            _ble.sendBytes(_buf.data(), (uint16_t)_buf.size());
-        _buf.clear();
+            _ble.sendBytes(_buf, _bufLen);
+        _bufLen = 0;
     }
 
-    // Discard buffer without sending — called on disconnect.
-    void reset() override { _buf.clear(); }
+    void reset() override { _bufLen = 0; }
 
 private:
     BLEManager &_ble;
-    std::vector<uint8_t> _buf;
+    uint8_t _buf[AUTO_FLUSH_BYTES];
+    uint16_t _bufLen;
 };

@@ -6,6 +6,19 @@ WiFiManager::WiFiManager(const char *ssid, const char *password,
 {
     _writeMutex = xSemaphoreCreateMutex();
     configASSERT(_writeMutex);
+
+    // Wire internal pong handling through BackChannelParser.
+    // WiFiManager owns the pong state (_waitingForPong, _firstPongReceived)
+    // so it registers its own handler here rather than exposing it publicly.
+    _bc.onPong([this]()
+               {
+        _waitingForPong   = false;
+        _loggedThresholds = 0;
+        Serial.println("[WiFi] PONG received");
+        if (!_firstPongReceived) {
+            _firstPongReceived = true;
+            if (_onFirstPong) _onFirstPong();
+        } });
 }
 
 void WiFiManager::begin()
@@ -220,7 +233,7 @@ void WiFiManager::onClientConnected(AsyncClient *client)
         _onConnected();
 
     _client = client;
-    _bcLen = 0;
+    _bc.reset();
     _waitingForPong = false;
     _pingNeeded = false;
     _lastPingSentMs = millis();
@@ -229,7 +242,7 @@ void WiFiManager::onClientConnected(AsyncClient *client)
     Serial.printf("iPhone connected from %s\n", client->remoteIP().toString().c_str());
 
     client->onData([](void *arg, AsyncClient *c, void *data, size_t len)
-                   { static_cast<WiFiManager *>(arg)->processBackChannel(static_cast<uint8_t *>(data), len); }, this);
+                   { static_cast<WiFiManager *>(arg)->_bc.feed(static_cast<uint8_t *>(data), len); }, this);
 
     client->onDisconnect([](void *arg, AsyncClient *c)
                          {
@@ -264,74 +277,4 @@ void WiFiManager::dropClient(const char *reason)
     _waitingForPong = false;
     if (_client)
         _client->close();
-}
-
-void WiFiManager::processBackChannel(const uint8_t *data, size_t len)
-{
-    for (size_t i = 0; i < len; i++)
-    {
-        uint8_t b = data[i];
-        if (_bcLen == 0)
-        {
-            if (b != BC_MAGIC)
-                continue;
-        }
-        if (_bcLen < sizeof(_bcBuf))
-        {
-            _bcBuf[_bcLen++] = b;
-        }
-        else
-        {
-            Serial.println("[BackChannel] Buffer overrun — resync");
-            _bcLen = 0;
-            continue;
-        }
-        if (_bcLen < 3)
-            continue;
-
-        uint16_t frameLen = (uint16_t)_bcBuf[1] | ((uint16_t)_bcBuf[2] << 8);
-        size_t totalSize = 3 + frameLen;
-        if (frameLen < 1 || totalSize > sizeof(_bcBuf))
-        {
-            Serial.printf("[BackChannel] Invalid len=%d — resync\n", frameLen);
-            _bcLen = 0;
-            continue;
-        }
-        if (_bcLen < totalSize)
-            continue;
-
-        uint8_t cmd = _bcBuf[3];
-        const uint8_t *payload = (_bcLen > 4) ? &_bcBuf[4] : nullptr;
-        size_t payloadLen = (frameLen > 1) ? frameLen - 1 : 0;
-
-        switch (cmd)
-        {
-        case BC_CMD_PONG:
-            _waitingForPong = false;
-            _loggedThresholds = 0;
-            Serial.println("[WiFi] PONG received");
-            if (!_firstPongReceived)
-            {
-                _firstPongReceived = true;
-                if (_onFirstPong)
-                    _onFirstPong();
-            }
-            break;
-        case BC_CMD_KEY1:
-            Serial.println("[BackChannel] KEY1 — GFX Test 1");
-            if (_keyCallback)
-                _keyCallback('1');
-            break;
-        case BC_CMD_KEY2:
-            Serial.println("[BackChannel] KEY2 — GFX Test 2");
-            if (_keyCallback)
-                _keyCallback('2');
-            break;
-        default:
-            if (_dataCallback && payloadLen > 0)
-                _dataCallback(payload, payloadLen);
-            break;
-        }
-        _bcLen = 0;
-    }
 }
