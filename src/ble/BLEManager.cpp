@@ -61,6 +61,8 @@ void BLEManager::TxCharCB::onSubscribe(NimBLECharacteristic *,
 void BLEManager::TxCharCB::onStatus(NimBLECharacteristic *, int code)
 {
     _owner->_lastStatusCode = code;
+    UBaseType_t countBefore = uxSemaphoreGetCount(_owner->_txDone);
+   //Serial.printf("[BLE] onStatus code=%d (0x%02x) semCount=%d\n", code, (uint8_t)code, (int)countBefore);
     xSemaphoreGive(_owner->_txDone);
 }
 
@@ -164,6 +166,7 @@ void BLEManager::sendBytes(const uint8_t *data, uint16_t len)
 
     uint16_t chunk = effectiveChunkSize();
     uint16_t off = 0;
+    uint32_t attempt = 0;
 
     while (off < len)
     {
@@ -189,11 +192,12 @@ void BLEManager::sendBytes(const uint8_t *data, uint16_t len)
         _lastStatusCode = 0;
         pTxChar->setValue(data + off, n);
 
+        //Serial.printf("[BLE] notify() attempt=%u off=%u n=%u\n", attempt++, off, n);
         bool ok = (_cccdIndicate) ? pTxChar->indicate() : pTxChar->notify();
+        //Serial.printf("[BLE] notify() returned %s\n", ok ? "true" : "false");
 
         if (!ok)
         {
-            // Rejected synchronously — restore and retry
             Serial.println("[BLE] notify() rejected synchronously");
             xSemaphoreGive(_txDone);
             vTaskDelay(pdMS_TO_TICKS(10));
@@ -210,16 +214,14 @@ void BLEManager::sendBytes(const uint8_t *data, uint16_t len)
 
         if (_lastStatusCode != 0)
         {
-            // Transient error (BLE_HS_ENOMEM=6 most common) — back off and retry.
-            // The stack recovers once the controller drains its queue.
             Serial.printf("[BLE] onStatus error=%d — retrying chunk\n", _lastStatusCode);
             vTaskDelay(pdMS_TO_TICKS(50));
             xSemaphoreGive(_txDone);
             continue;
         }
 
-        xSemaphoreGive(_txDone); // restore idle state for next iteration
-        off += n;                // chunk confirmed queued — advance
+        xSemaphoreGive(_txDone);
+        off += n;
     }
 }
 

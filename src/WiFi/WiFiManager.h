@@ -23,8 +23,16 @@ public:
     void setHeartbeat(uint32_t pingIntervalMs, uint32_t pongTimeoutMs)
     {
         _pingIntervalMs = pingIntervalMs;
-        _pongTimeoutMs = pongTimeoutMs;
+        _pongTimeoutMs  = pongTimeoutMs;
+        // Default early-send window = 1/3 of interval (e.g. 1000ms for 3s interval).
+        // send() will pre-emptively ping if a frame arrives within this window
+        // of the next scheduled ping, preventing a full frame from delaying it.
+        _pingEarlyMs = pingIntervalMs / 3;
     }
+
+    // Override the early-send window if the default isn't right for your
+    // frame sizes. Set to 0 to disable early send (original behaviour).
+    void setPingEarlyMs(uint32_t earlyMs) { _pingEarlyMs = earlyMs; }
 
     // ── Status ────────────────────────────────────────────────────────────────
     bool isConnected() const;
@@ -32,8 +40,11 @@ public:
     size_t clientSpace() const { return _client ? _client->space() : 0; }
 
     // ── GFX data send (any task, serialised by _writeMutex) ───────────────────
-    // Takes _writeMutex, writes all bytes, checks _pingNeeded before releasing.
-    // A pending ping will be sent at the clean frame boundary before unlock.
+    // Takes _writeMutex for the full frame write.
+    // On entry: if a ping is due or within _pingEarlyMs of due, sends it first
+    //           so it lands before the frame rather than being delayed by it.
+    // On exit:  if _pingNeeded is still set, sends ping at the frame boundary
+    //           before releasing the mutex.
     void send(const uint8_t *data, size_t len);
     void send(const char *str);
 
@@ -41,8 +52,6 @@ public:
     void sendCmd(uint8_t cmd, const uint8_t *payload = nullptr, size_t payloadLen = 0);
 
     // ── Heartbeat + maintenance (heartbeat task, ~100ms) ──────────────────────
-    // Checks ping interval, sets _pingNeeded, tries to send ping.
-    // Pong watchdog. Safe to call from any task.
     void update();
 
     // ── Callbacks ─────────────────────────────────────────────────────────────
@@ -50,7 +59,6 @@ public:
     void onConnected(void (*cb)()) { _onConnected = cb; }
     void onDisconnected(void (*cb)()) { _onDisconnected = cb; }
     void onFirstPong(void (*cb)()) { _onFirstPong = cb; }
-    // Forwarded to BackChannelParser:
     void onKey(void (*cb)(uint8_t key)) { _bc.onKey(cb); }
     void onTouch(void (*cb)(uint8_t cmd, int16_t x, int16_t y)) { _bc.onTouch(cb); }
 
@@ -63,30 +71,24 @@ private:
     AsyncServer *_server = nullptr;
     AsyncClient *_client = nullptr;
 
-    // ── Write serialisation ───────────────────────────────────────────────────
-    // Taken by any task writing to _client. Ensures GFX data and pings never
-    // interleave — a ping always lands at a clean frame boundary.
     SemaphoreHandle_t _writeMutex = nullptr;
 
-    // ── Heartbeat state ───────────────────────────────────────────────────────
-    uint32_t _pingIntervalMs = 3000;
-    uint32_t _pongTimeoutMs = 9000;
-    uint32_t _lastPingSentMs = 0;
-    bool _waitingForPong = false;
-    bool _pingNeeded = false; // set when interval elapses, cleared when sent
-    uint8_t _loggedThresholds = 0;
+    uint32_t _pingIntervalMs   = 3000;
+    uint32_t _pongTimeoutMs    = 9000;
+    uint32_t _pingEarlyMs      = 1000;
+    uint32_t _lastPingSentMs   = 0;
+    bool     _waitingForPong   = false;
+    bool     _pingNeeded       = false;
+    uint8_t  _loggedThresholds = 0;
 
-    // ── Callbacks ─────────────────────────────────────────────────────────────
     DataCallback _dataCallback;
-    void (*_onConnected)() = nullptr;
+    void (*_onConnected)()    = nullptr;
     void (*_onDisconnected)() = nullptr;
-    void (*_onFirstPong)() = nullptr;
-    bool _firstPongReceived = false;
+    void (*_onFirstPong)()    = nullptr;
+    bool _firstPongReceived   = false;
 
-    // ── Back-channel parser ───────────────────────────────────────────────────
     BackChannelParser _bc;
 
-    // ── Internals ─────────────────────────────────────────────────────────────
     void sendPingNow();
     void startMDNS();
     void startTCPServer();
