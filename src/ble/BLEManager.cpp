@@ -1,8 +1,11 @@
 #include "BLEManager.h"
 #include <NimBLE2904.h>
+// Forward declare os_msys_num_free() -- part of NimBLE host stack.
+// Avoids include path issues with NimBLE-Arduino vs ESP-IDF layouts.
+extern "C" int os_msys_num_free(void);
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Callbacks
+//  NimBLE server callbacks
 // ─────────────────────────────────────────────────────────────────────────────
 
 void BLEManager::ServerCB::onConnect(NimBLEServer *, NimBLEConnInfo &connInfo)
@@ -22,8 +25,13 @@ void BLEManager::ServerCB::onDisconnect(NimBLEServer *, NimBLEConnInfo &, int re
     _owner->_cccdNotify = false;
     _owner->_cccdIndicate = false;
     _owner->_bc.reset();
-    // Give semaphore so any sendBytes() blocked in the wait loop can exit
+
+    // Flush stream buffer so drain task doesn't send stale data on reconnect
+    xStreamBufferReset(_owner->_txStream);
+
+    // Unblock drain task if it is waiting on _txDone semaphore
     xSemaphoreGive(_owner->_txDone);
+
     Serial.printf("[BLE] disconnected reason=%d\n", reason);
     _owner->startAdvertising();
 }
@@ -33,6 +41,10 @@ void BLEManager::ServerCB::onMTUChange(uint16_t mtu, NimBLEConnInfo &)
     _owner->_mtu = mtu;
     Serial.printf("[BLE] MTU=%d\n", mtu);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  TX characteristic callbacks
+// ─────────────────────────────────────────────────────────────────────────────
 
 void BLEManager::TxCharCB::onSubscribe(NimBLECharacteristic *,
                                        NimBLEConnInfo &,
@@ -48,7 +60,7 @@ void BLEManager::TxCharCB::onSubscribe(NimBLECharacteristic *,
 
     if (_owner->_notifySubscribed)
     {
-        // Ensure semaphore starts available so first sendBytes() can proceed
+        // Prime the semaphore so drain task can send the first chunk
         xSemaphoreGive(_owner->_txDone);
     }
 
@@ -56,15 +68,17 @@ void BLEManager::TxCharCB::onSubscribe(NimBLECharacteristic *,
         _owner->_subscribedCallback(_owner->_notifySubscribed);
 }
 
-// Called by NimBLE stack when a notification/indication is acknowledged.
-// Gives the semaphore so sendBytes() can send the next chunk.
+// Called by NimBLE stack when notification is queued to the controller.
+// Gives the semaphore so the drain task can send the next chunk.
 void BLEManager::TxCharCB::onStatus(NimBLECharacteristic *, int code)
 {
     _owner->_lastStatusCode = code;
-    UBaseType_t countBefore = uxSemaphoreGetCount(_owner->_txDone);
-   //Serial.printf("[BLE] onStatus code=%d (0x%02x) semCount=%d\n", code, (uint8_t)code, (int)countBefore);
     xSemaphoreGive(_owner->_txDone);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  RX characteristic callback
+// ─────────────────────────────────────────────────────────────────────────────
 
 void BLEManager::RxCharCB::onWrite(NimBLECharacteristic *pChar, NimBLEConnInfo &)
 {
@@ -83,8 +97,14 @@ void BLEManager::RxCharCB::onWrite(NimBLECharacteristic *pChar, NimBLEConnInfo &
 
 BLEManager::BLEManager()
 {
-    // Binary semaphore — starts taken. Given by onSubscribe (ready to send)
-    // and onStatus (previous chunk acknowledged). Taken by sendBytes().
+    // Stream buffer: 8KB storage, trigger level 1 (wake drain task on any byte)
+    // Trigger level 1 means the drain task wakes as soon as any data arrives.
+    // The receive timeout handles the "few bytes idle" case -- drain task uses
+    // a 5ms timeout so partial flushes are always delivered promptly.
+    _txStream = xStreamBufferCreate(TX_STREAM_BUF_SIZE, 1);
+    configASSERT(_txStream);
+
+    // Binary semaphore -- starts taken. Given by onSubscribe and onStatus.
     _txDone = xSemaphoreCreateBinary();
     configASSERT(_txDone);
 }
@@ -112,6 +132,19 @@ void BLEManager::begin()
     pRxChar->setCallbacks(new RxCharCB(this));
 
     pService->start();
+
+    // Start drain task on core 0 (BLE stack runs on core 0 anyway).
+    // Stack size 4KB is sufficient -- drain loop is simple.
+    xTaskCreatePinnedToCore(
+        drainTaskFunc,     // task function
+        "ble_drain",       // name (for debugging)
+        4096,              // stack size in bytes
+        this,              // parameter
+        5,                 // priority (same as NimBLE host task)
+        &_drainTaskHandle, // handle
+        0                  // core 0
+    );
+
     startAdvertising();
 }
 
@@ -136,92 +169,173 @@ bool BLEManager::canSend() const
 
 uint16_t BLEManager::effectiveChunkSize() const
 {
-    // Use full MTU payload — sendBytes() blocks until each chunk is fully
-    // ACK'd before sending the next, so only one mbuf is ever in flight.
-    // No need to artificially cap — larger chunks = fewer round trips.
     uint16_t maxPayload = (_mtu > 23) ? (_mtu - 3) : 20;
     return maxPayload;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  sendBytes — semaphore-gated chunked notify
+//  sendBytes -- write to stream buffer, return immediately
 //
-//  Splits data into MTU-sized chunks. For each chunk:
-//    1. Take _txDone — blocks until onStatus() fires for previous chunk
-//    2. Call notify()
-//    3. onStatus() gives _txDone when stack has queued the packet
-//
-//  onStatus fires when NimBLE has accepted the packet into its queue —
-//  not when the iPhone receives it (notifications have no application ACK).
-//  This is still correct pacing: one chunk in the stack queue at a time,
-//  which is all a NUS UART transport needs.
-//
-//  On return, _txDone is given (idle state) so the next sendBytes() call
-//  can take it immediately without stalling.
+//  The caller (GFX task / loop()) is never blocked by BLE timing.
+//  If the stream buffer is full (8KB backlog) xStreamBufferSend will block
+//  briefly -- this is the correct backpressure point and is rarely hit.
 // ─────────────────────────────────────────────────────────────────────────────
 void BLEManager::sendBytes(const uint8_t *data, uint16_t len)
 {
     if (!data || len == 0)
         return;
+    if (!canSend())
+        return;
 
-    uint16_t chunk = effectiveChunkSize();
-    uint16_t off = 0;
-    uint32_t attempt = 0;
-
-    while (off < len)
+    // Write to stream buffer. If full, block up to _sendTimeoutMs per chunk.
+    // Loop handles the case where len > available space -- we keep writing
+    // until all bytes are queued or we lose the connection.
+    //
+    // On timeout: log and drop remaining bytes. This matches WiFi behaviour
+    // and prevents loop() from stalling indefinitely if BLE goes slow/dead.
+    // The connection watchdog will detect the dead link and call onDisconnect,
+    // which triggers initPhoneUI() on reconnect for a full redraw.
+    // Write to stream buffer -- block until space is available.
+    // Uses portMAX_DELAY matching the old semaphore-gated sendBytes() behavior:
+    // the GFX task blocks if BLE can't keep up, and NimBLE's supervision
+    // timeout is the ultimate dead-link detector that fires onDisconnect.
+    // On disconnect the stream buffer is flushed and initPhoneUI() redraws.
+    size_t sent = 0;
+    while (sent < len)
     {
         if (!canSend())
-            return;
+            return; // disconnected -- bail cleanly
+        size_t n = xStreamBufferSend(_txStream,
+                                     data + sent,
+                                     len - sent,
+                                     portMAX_DELAY);
+        sent += n;
+    }
+}
 
-        uint16_t n = min(chunk, (uint16_t)(len - off));
+// ─────────────────────────────────────────────────────────────────────────────
+//  Drain task -- runs forever on core 0
+//
+//  Flow:
+//    1. Wait for _txDone semaphore (given by onSubscribe or previous onStatus)
+//    2. Read up to one MTU chunk from stream buffer (5ms timeout)
+//    3. If data: notify(), which triggers onStatus() → gives _txDone
+//    4. If no data after timeout: give _txDone back and wait again
+//
+//  The 5ms receive timeout is the "idle flush" mechanism -- any bytes sitting
+//  in the buffer are drained within 5ms even if less than one MTU worth.
+// ─────────────────────────────────────────────────────────────────────────────
+void BLEManager::drainTaskFunc(void *arg)
+{
+    static_cast<BLEManager *>(arg)->runDrainLoop();
+}
 
-        // Wait for previous chunk's onStatus. Timeout 2s as safety net.
-        if (xSemaphoreTake(_txDone, pdMS_TO_TICKS(2000)) != pdTRUE)
-        {
-            Serial.println("[BLE] sendBytes timeout waiting for stack");
-            xSemaphoreGive(_txDone);
-            return;
-        }
+void BLEManager::runDrainLoop()
+{
+    // Local retry buffer -- holds the current chunk until successfully sent.
+    // Keeping it here (not re-injecting into the stream buffer) preserves
+    // ordering: the same chunk is retried before any newer data is consumed.
+    uint8_t chunk[252];  // sized for max MTU payload (MTU 255 - 3 ATT header)
+    size_t pendingN = 0; // >0: chunk[] holds data waiting to be sent/retried
+
+    while (true)
+    {
+
+        // ── Wait for stack ready ──────────────────────────────────────────────
+        // _txDone is given by:
+        //   onSubscribe -- initial prime when iPhone subscribes
+        //   onStatus    -- after each notify() is queued to controller
+        if (xSemaphoreTake(_txDone, portMAX_DELAY) != pdTRUE)
+            continue;
 
         if (!canSend())
         {
+            // Disconnected -- discard any pending retry, wait for reconnect
+            pendingN = 0;
             xSemaphoreGive(_txDone);
-            return;
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+
+        // ── Get next chunk (only if no retry pending) ─────────────────────────
+        if (pendingN == 0)
+        {
+            uint16_t chunkSize = effectiveChunkSize();
+
+            // 5ms timeout -- idle flush: partial buffers are always delivered
+            // within 5ms even if less than one MTU of data is waiting.
+            pendingN = xStreamBufferReceive(_txStream, chunk, chunkSize,
+                                            pdMS_TO_TICKS(5));
+            if (pendingN == 0)
+            {
+                // Nothing in buffer -- return semaphore and wait
+                xSemaphoreGive(_txDone);
+                continue;
+            }
+        }
+
+        // ── Send chunk ────────────────────────────────────────────────────────
+        // chunk[] holds either fresh data or a retry of the previous chunk.
+        if (!canSend())
+        {
+            pendingN = 0;
+            xSemaphoreGive(_txDone);
+            continue;
+        }
+
+        // Gate on mbuf availability before notify() -- canonical Espressif
+        // pattern from bleprph_throughput. Proactively avoids BLE_HS_ENOMEM
+        // (error=6) rather than reacting to it. Each notify needs ~2 mbufs
+        // (ATT PDU + L2CAP header). We require 4 for headroom.
+        // 1ms yield per check keeps CPU use negligible.
+        while (os_msys_num_free() < 4 && canSend())
+        {
+            vTaskDelay(pdMS_TO_TICKS(1));
+        }
+        if (!canSend())
+        {
+            pendingN = 0;
+            xSemaphoreGive(_txDone);
+            continue;
         }
 
         _lastStatusCode = 0;
-        pTxChar->setValue(data + off, n);
-
-        //Serial.printf("[BLE] notify() attempt=%u off=%u n=%u\n", attempt++, off, n);
+        pTxChar->setValue(chunk, pendingN);
         bool ok = (_cccdIndicate) ? pTxChar->indicate() : pTxChar->notify();
-        //Serial.printf("[BLE] notify() returned %s\n", ok ? "true" : "false");
 
         if (!ok)
         {
-            Serial.println("[BLE] notify() rejected synchronously");
+            // Synchronous rejection -- pendingN stays set, retry next iteration
             xSemaphoreGive(_txDone);
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
 
-        // Wait for THIS chunk's onStatus before advancing
+        // ── Wait for onStatus ─────────────────────────────────────────────────
+        // onStatus fires when NimBLE has queued the packet to the controller.
         if (xSemaphoreTake(_txDone, pdMS_TO_TICKS(2000)) != pdTRUE)
         {
-            Serial.println("[BLE] sendBytes timeout waiting for onStatus");
+            Serial.println("[BLE] onStatus timeout -- retrying");
             xSemaphoreGive(_txDone);
-            return;
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
         }
 
         if (_lastStatusCode != 0)
         {
-            Serial.printf("[BLE] onStatus error=%d — retrying chunk\n", _lastStatusCode);
-            vTaskDelay(pdMS_TO_TICKS(50));
+            // error=6 (BLE_HS_ENOMEM): controller ACL TX buffer full.
+            // pendingN stays set -- same chunk retries next iteration.
+            // 50ms delay lets the controller drain queued packets.
+            // Ordering guaranteed: no newer data consumed until this succeeds.
+            Serial.printf("[BLE] onStatus error=%d -- retrying chunk\n", _lastStatusCode);
             xSemaphoreGive(_txDone);
+            vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
 
+        // ── Success ───────────────────────────────────────────────────────────
+        pendingN = 0;
         xSemaphoreGive(_txDone);
-        off += n;
     }
 }
 

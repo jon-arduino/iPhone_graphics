@@ -4,6 +4,7 @@
 #include <functional>
 #include <NimBLEDevice.h>
 #include <freertos/semphr.h>
+#include <freertos/stream_buffer.h>
 #include "Protocol.h"
 #include "BackChannelParser.h"
 
@@ -23,16 +24,20 @@ public:
     bool canSend() const;
     uint16_t effectiveChunkSize() const;
 
-    // Send bytes — blocks until all bytes are delivered (one MTU-chunk at a time).
-    // Each chunk waits for BLE stack acknowledgment before sending the next.
-    // No ring buffer, no background drain — the BLE stack drives pacing naturally.
+    // Send bytes — writes to stream buffer.
+    // 0 = non-blocking (drop immediately if full).
+    // portMAX_DELAY = block forever (stall caller until BLE drains).
+    // Default: 500ms — matches roughly 2 BLE connection intervals of backlog,
+    // after which the link is probably lost and dropping is better than stalling.
     void sendBytes(const uint8_t *data, uint16_t len);
 
-    // No-op — heartbeat task not needed without ring buffer.
-    // Kept so call sites in main.cpp compile without change.
+    // Configure how long sendBytes() waits when the TX buffer is full.
+    // Call before begin(). Default is 500ms.
+
+    // No-op — kept so call sites in main.cpp compile without change.
     void update() {}
 
-    // Callbacks — forwarded to BackChannelParser or handled locally
+    // Callbacks
     void onKey(std::function<void(uint8_t)> cb) { _bc.onKey(cb); }
     void onTouch(std::function<void(uint8_t, int16_t, int16_t)> cb) { _bc.onTouch(cb); }
     void onSubscribed(void (*cb)(bool ready)) { _subscribedCallback = cb; }
@@ -58,20 +63,34 @@ private:
     volatile bool _cccdIndicate = false;
     volatile int _lastStatusCode = 0;
 
-    // Semaphore: taken before notify(), given by onStatus() when ACK arrives.
-    // sendBytes() blocks here — BLE stack naturally paces transmission.
+    // ── TX stream buffer ──────────────────────────────────────────────────────
+    // Single producer (sendBytes), single consumer (drain task).
+    // xStreamBuffer is safe for this pattern without a mutex.
+    static constexpr size_t TX_STREAM_BUF_SIZE = 8192; // absorbs burst writes
+    StreamBufferHandle_t _txStream = nullptr;
+
+    // onStatus semaphore — given by NimBLE when packet is queued to controller.
+    // Drain task takes this before sending next chunk — natural flow control.
     SemaphoreHandle_t _txDone = nullptr;
 
-    // RX
+    // Drain task handle — stored so we can notify it on disconnect
+    TaskHandle_t _drainTaskHandle = nullptr;
+
+    // How long sendBytes() blocks when TX stream buffer is full.
+
+    // ── RX ────────────────────────────────────────────────────────────────────
     static constexpr size_t RX_BUF_SIZE = 256;
     uint8_t rxBuf[RX_BUF_SIZE];
     volatile size_t rxLen = 0;
 
-    // Back-channel parser — framing and dispatch shared with WiFiManager
     BackChannelParser _bc;
-
     void (*_subscribedCallback)(bool ready) = nullptr;
 
+    // ── Drain task ────────────────────────────────────────────────────────────
+    static void drainTaskFunc(void *arg);
+    void runDrainLoop();
+
+    // ── NimBLE callbacks ──────────────────────────────────────────────────────
     class ServerCB : public NimBLEServerCallbacks
     {
     public:

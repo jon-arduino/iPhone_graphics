@@ -218,7 +218,7 @@ void setup()
     initTftUI();
 
     bleTransport.begin();
-    wifiManager.begin();
+    // wifiManager.begin();
 
     wifiManager.setHeartbeat(PING_INTERVAL_MS, PONG_TIMEOUT_MS);
 

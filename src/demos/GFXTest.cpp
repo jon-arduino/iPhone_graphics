@@ -115,8 +115,9 @@ static void testCircles(Adafruit_GFX &a, Adafruit_GFX &b, uint16_t w, uint16_t h
     BOTH(fillScreen(0x0000));
     int16_t cx = (int16_t)w / 2, cy = (int16_t)h / 2;
     int16_t rmax = (int16_t)min(w, h) / 2;
-    for (int16_t r = 2; r < rmax; r += 6)
+    for (int16_t r = 2; r < rmax; r += 6){
         BOTH(drawCircle(cx, cy, r, 0x07FF));
+        }
     pauseAndFlush(a, b, d);
 
     BOTH(fillScreen(0x0000));
