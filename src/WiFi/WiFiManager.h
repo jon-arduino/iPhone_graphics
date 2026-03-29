@@ -17,13 +17,35 @@ public:
                 const char *mdnsHostname = "esp32-uart",
                 uint16_t tcpPort = 9000);
 
+    // ── SoftAP fallback ───────────────────────────────────────────────────────
+    // Call before begin() to enable SoftAP fallback when STA connection fails.
+    // If not called, begin() blocks indefinitely waiting for STA (original behaviour).
+    // staTimeoutMs: how long to try STA before giving up and starting SoftAP.
+    void setSoftAP(const char *apSsid,
+                   const char *apPassword,
+                   uint32_t staTimeoutMs = 15000)
+    {
+        _apSsid = apSsid;
+        _apPassword = apPassword;
+        _staTimeoutMs = staTimeoutMs;
+    }
+
+    // Returns true if operating as SoftAP (iPhone must join ESP32's network).
+    // Returns false if connected to a router in STA mode (normal operation).
+    bool isInAPMode() const { return _apMode; }
+
+    // Tear down current WiFi connection and bring up SoftAP immediately.
+    // Requires setSoftAP() to have been called with credentials beforehand.
+    // Safe to call from loop() / console handler.
+    void switchToSoftAP();
+
     void begin();
 
     // ── Configuration ─────────────────────────────────────────────────────────
     void setHeartbeat(uint32_t pingIntervalMs, uint32_t pongTimeoutMs)
     {
         _pingIntervalMs = pingIntervalMs;
-        _pongTimeoutMs  = pongTimeoutMs;
+        _pongTimeoutMs = pongTimeoutMs;
         // Default early-send window = 1/3 of interval (e.g. 1000ms for 3s interval).
         // send() will pre-emptively ping if a frame arrives within this window
         // of the next scheduled ping, preventing a full frame from delaying it.
@@ -63,8 +85,17 @@ public:
     void onTouch(void (*cb)(uint8_t cmd, int16_t x, int16_t y)) { _bc.onTouch(cb); }
 
 private:
+    // ── STA credentials ───────────────────────────────────────────────────────
     const char *_ssid;
     const char *_password;
+
+    // ── SoftAP config (optional) ──────────────────────────────────────────────
+    const char *_apSsid = nullptr;
+    const char *_apPassword = nullptr;
+    uint32_t _staTimeoutMs = 15000;
+    bool _apMode = false;
+
+    // ── Network / TCP ─────────────────────────────────────────────────────────
     const char *_mdnsHostname;
     uint16_t _tcpPort;
 
@@ -73,25 +104,26 @@ private:
 
     SemaphoreHandle_t _writeMutex = nullptr;
 
-    uint32_t _pingIntervalMs   = 3000;
-    uint32_t _pongTimeoutMs    = 9000;
-    uint32_t _pingEarlyMs      = 1000;
-    uint32_t _lastPingSentMs   = 0;
-    bool     _waitingForPong   = false;
-    bool     _pingNeeded       = false;
-    uint8_t  _loggedThresholds = 0;
+    uint32_t _pingIntervalMs = 3000;
+    uint32_t _pongTimeoutMs = 9000;
+    uint32_t _pingEarlyMs = 1000;
+    uint32_t _lastPingSentMs = 0;
+    bool _waitingForPong = false;
+    bool _pingNeeded = false;
+    uint8_t _loggedThresholds = 0;
 
     DataCallback _dataCallback;
-    void (*_onConnected)()    = nullptr;
+    void (*_onConnected)() = nullptr;
     void (*_onDisconnected)() = nullptr;
-    void (*_onFirstPong)()    = nullptr;
-    bool _firstPongReceived   = false;
+    void (*_onFirstPong)() = nullptr;
+    bool _firstPongReceived = false;
 
     BackChannelParser _bc;
 
     void sendPingNow();
     void startMDNS();
     void startTCPServer();
+    void startSoftAP();
     void onClientConnected(AsyncClient *client);
     void dropClient(const char *reason);
 };

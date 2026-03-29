@@ -64,7 +64,6 @@ void BackChannelParser::dispatch(uint8_t cmd, const uint8_t *payload, size_t pay
     {
 
     case BC_CMD_PONG:
-        Serial.println("[BackChannel] PONG");
         if (_pongCallback)
             _pongCallback();
         break;

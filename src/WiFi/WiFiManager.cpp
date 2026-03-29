@@ -11,7 +11,6 @@ WiFiManager::WiFiManager(const char *ssid, const char *password,
                {
         _waitingForPong   = false;
         _loggedThresholds = 0;
-        Serial.println("[WiFi] PONG received");
         if (!_firstPongReceived) {
             _firstPongReceived = true;
             if (_onFirstPong) _onFirstPong();
@@ -20,14 +19,30 @@ WiFiManager::WiFiManager(const char *ssid, const char *password,
 
 void WiFiManager::begin()
 {
+    // ── Try STA connection ────────────────────────────────────────────────────
+    WiFi.mode(_apSsid ? WIFI_AP_STA : WIFI_STA); // AP_STA mode if SoftAP configured
     WiFi.begin(_ssid, _password);
-    Serial.print("Connecting to WiFi");
+    Serial.print("[WiFi] Connecting to STA");
+
+    uint32_t start = millis();
+    uint32_t timeout = _apSsid ? _staTimeoutMs : portMAX_DELAY;
+
     while (WiFi.status() != WL_CONNECTED)
     {
+        if (_apSsid && (millis() - start >= timeout))
+        {
+            Serial.println("\n[WiFi] STA timeout — starting SoftAP");
+            WiFi.disconnect(true);
+            startSoftAP();
+            return;
+        }
         delay(500);
         Serial.print(".");
     }
-    Serial.printf("\nConnected — IP: %s\n", WiFi.localIP().toString().c_str());
+
+    // ── STA connected ─────────────────────────────────────────────────────────
+    Serial.printf("\n[WiFi] STA connected — IP: %s\n", WiFi.localIP().toString().c_str());
+    _apMode = false;
     startMDNS();
     startTCPServer();
 }
@@ -45,7 +60,7 @@ void WiFiManager::update()
     {
         _waitingForPong = false;
         _lastPingSentMs = 0;
-        _pingNeeded     = false;
+        _pingNeeded = false;
         return;
     }
 
@@ -144,15 +159,15 @@ void WiFiManager::send(const uint8_t *data, size_t len)
             delay(1);
             continue;
         }
-        size_t chunk   = min(available, len - sent);
+        size_t chunk = min(available, len - sent);
         size_t written = _client->write(reinterpret_cast<const char *>(data + sent), chunk);
         if (written == 0)
         {
             Serial.println("[WiFi] write() returned 0, aborting");
             break;
         }
-        sent  += written;
-        start  = millis();
+        sent += written;
+        start = millis();
     }
 
     // ── Exit ping check ───────────────────────────────────────────────────────
@@ -179,13 +194,13 @@ void WiFiManager::sendPingNow()
         return;
     }
     uint8_t frame[4] = {BC_MAGIC,
-                        0x01, 0x00,   // length = 1 (cmd byte only)
+                        0x01, 0x00, // length = 1 (cmd byte only)
                         GFX_CMD_PING};
     _client->write(reinterpret_cast<const char *>(frame), 4);
-    _lastPingSentMs   = millis();
-    _waitingForPong   = true;
+    _lastPingSentMs = millis();
+    _waitingForPong = true;
     _loggedThresholds = 0;
-    _pingNeeded       = false;
+    _pingNeeded = false;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -200,7 +215,76 @@ void WiFiManager::sendCmd(uint8_t cmd, const uint8_t *payload, size_t payloadLen
         send(payload, payloadLen);
 }
 
-bool WiFiManager::isConnected() const { return WiFi.status() == WL_CONNECTED; }
+bool WiFiManager::isConnected() const
+{
+    // In AP mode the ESP32 is always "connected" — it's hosting the network.
+    return _apMode || (WiFi.status() == WL_CONNECTED);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  switchToSoftAP() -- tear down STA/client and bring up SoftAP on demand
+//
+//  Called from loop() via console 'w' command. Drops any connected iPhone
+//  client, disconnects from router, and starts the ESP32-hosted network.
+//  iPhone joins "ESP32-RemoteUI" manually then reconnects via WiFi scan.
+// ─────────────────────────────────────────────────────────────────────────────
+void WiFiManager::switchToSoftAP()
+{
+    if (!_apSsid)
+    {
+        Serial.println("[WiFi] switchToSoftAP: no AP credentials set -- call setSoftAP() first");
+        return;
+    }
+    if (_apMode)
+    {
+        Serial.printf("[WiFi] Already in AP mode -- SSID: %s  password: %s\n",
+                      _apSsid, _apPassword);
+        return;
+    }
+
+    Serial.println("[WiFi] Switching to SoftAP mode...");
+
+    // Drop any connected iPhone client cleanly
+    if (_client)
+    {
+        _client->close();
+        _client = nullptr;
+    }
+
+    // Stop TCP server and mDNS before changing network mode
+    if (_server)
+    {
+        _server->end();
+        delete _server;
+        _server = nullptr;
+    }
+    MDNS.end();
+
+    // Disconnect from router and start AP
+    WiFi.disconnect(true);
+    startSoftAP();
+}
+void WiFiManager::startSoftAP()
+{
+    _apMode = true;
+    WiFi.mode(WIFI_AP);
+    bool ok = WiFi.softAP(_apSsid, _apPassword);
+    if (!ok)
+    {
+        Serial.println("[WiFi] ERROR: softAP() failed");
+        return;
+    }
+
+    IPAddress ip(192, 168, 4, 1);
+    WiFi.softAPConfig(ip, ip, IPAddress(255, 255, 255, 0));
+
+    Serial.printf("[WiFi] SoftAP up — SSID: %s  IP: %s\n",
+                  _apSsid, WiFi.softAPIP().toString().c_str());
+
+    // mDNS and TCP server work identically in AP mode
+    startMDNS();
+    startTCPServer();
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Private
@@ -242,11 +326,11 @@ void WiFiManager::onClientConnected(AsyncClient *client)
     if (wasConnected && _onConnected)
         _onConnected();
 
-    _client            = client;
+    _client = client;
     _bc.reset();
-    _waitingForPong    = false;
-    _pingNeeded        = false;
-    _lastPingSentMs    = millis();
+    _waitingForPong = false;
+    _pingNeeded = false;
+    _lastPingSentMs = millis();
     _firstPongReceived = false;
 
     Serial.printf("iPhone connected from %s\n", client->remoteIP().toString().c_str());

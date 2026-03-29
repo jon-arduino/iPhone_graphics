@@ -43,7 +43,7 @@ static constexpr uint32_t PONG_TIMEOUT_MS = 9000;
 static constexpr uint32_t AUTO_FLUSH_MS = 50;
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Hardware
+//  Hardware Dissplay (tft) and GPS
 // ─────────────────────────────────────────────────────────────────────────────
 #define TFT_CS 5
 #define TFT_DC 2
@@ -61,6 +61,12 @@ static BleGraphicsTransport bleTransport(ble);
 
 const char *ssid = "lotz_net1";
 const char *password = "thelotznetwork1";
+
+// SoftAP fallback -- ESP32 hosts its own network when home network unavailable.
+// Also triggered by console 'w' command for demos away from home network.
+static const char *AP_SSID = "ESP32-RemoteUI";
+static const char *AP_PASSWORD = "remoteui123";
+
 WiFiManager wifiManager(ssid, password, "esp32-gps");
 WiFiTransport wifiTransport(wifiManager);
 
@@ -147,9 +153,15 @@ static void pollConsole()
     {
         pendingTest = (uint8_t)c;
     }
+    else if (c == 'w' || c == 'W')
+    {
+        Serial.printf("[WiFi] Switching to SoftAP -- SSID: %s  password: %s\n",
+                      AP_SSID, AP_PASSWORD);
+        wifiManager.switchToSoftAP();
+    }
     else
     {
-        Serial.println("Unknown command. Type 1 for GFX test, 2 for Orient test.");
+        Serial.println("Unknown command. Type 1 for GFX test, 2 for Orient test, W for SoftAP.");
     }
     while (Serial.available())
     {
@@ -207,7 +219,7 @@ static bool updateActiveTransport()
 void setup()
 {
     Serial.begin(115200);
-    Serial.println("\nBoot. Type 1 for GFX test, 2 for Orient test.");
+    Serial.println("\nBoot. Type 1 for GFX test, 2 for Orient test, W to switch to SoftAP WiFi.");
 
     // Apply tuning constants
     wifiTransport.setAutoFlushMs(AUTO_FLUSH_MS);
@@ -218,7 +230,8 @@ void setup()
     initTftUI();
 
     bleTransport.begin();
-    // wifiManager.begin();
+    wifiManager.setSoftAP(AP_SSID, AP_PASSWORD); // fallback if home network absent
+    wifiManager.begin();
 
     wifiManager.setHeartbeat(PING_INTERVAL_MS, PONG_TIMEOUT_MS);
 

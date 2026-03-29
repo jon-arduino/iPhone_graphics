@@ -1,8 +1,8 @@
 // Graphics.cpp
 #include "Graphics.h"
 #include <string.h>
-#include "ble/BLEManager.h"
-extern BLEManager ble; // must match the exact name/type of your global instance
+//#include "ble/BLEManager.h
+//extern BLEManager ble; // must match the exact name/type of your global instance
 
 // -----------------------------------------------------------------------------
 // Constructor
